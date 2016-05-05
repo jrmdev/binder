@@ -1,0 +1,20 @@
+[core]
+
+;; Full path to your base projects folder
+PROJECTS_PATH = ~/projects
+
+;; Comma-separated list of full paths to your dictionary files
+;; (the sub folders will also be included)
+DICTS_PATHS = /usr/share/dict,~/dictionaries
+
+;; Full path to john-the-ripper (jumbo) binary
+;; and timeout in minutes (for brute-force)
+JTR_PATH = /opt/john-1.8.0-jumbo-1/run/john
+JTR_TMOUT = 25
+
+;; The following options can be left blank
+;; They will be populated by the program
+CURRENT_PROJECT = 
+CRACK_LEVEL = 0
+CURRENT_DOMAIN = 
+CURRENT_DOMAIN_FQDN =
