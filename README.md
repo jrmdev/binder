@@ -1,5 +1,5 @@
 # Binder
-Binder is a crappy script that I used to organise and browse through the data collected during internal network pentests.
+Binder is a crappy script that I use to organise and browse through the data collected during internal network pentests.
 
 ### Why "binder" ?
 Because finding names for software is hard.
@@ -9,19 +9,19 @@ An attack tool. Although it can automate some basic network discovery.
 
 ### That sounds useless, what does it do then?
 
-- Most importantly it will make it easier to find and reuse data about Active Directory users, groups, accounts and passwords that you collect during internal networks pentest.
+- Most importantly it will make it easier to find and reuse data about Active Directory users, groups, accounts and passwords that you collect during internal networks pentests.
 
-- Once you have compromised a domain, feed the script with and enum file (e.g. from "enum4linux.pl" and a ntds dump file (pwdump format). It will parse them and organise the data conveniently in a sqlite db. You can then issue commands to query the data in a convenient way.
+- Once you have compromised a domain, feed the script with an enum file (e.g. from "enum4linux.pl") and a ntds dump file (pwdump format). It will parse them and organise the data conveniently in a sqlite db. You can then issue commands to query the data in a convenient way.
 
 - It will also automate and optimise password cracking on your shitty consultant's laptop. It does it by running appropriate John the Ripper commands (dictionaries, rules, masks [todo: markov, bruteforce]) and maintaining the database up to date.
 
-- It handle multiple projects which you can start, stop and resume your work on. It also handle multiple domains per project. It will create and maintain a sqlite database in each project directory.
+- It handles multiple projects which you can start, stop and resume your work on. It also handles multiple domains per project. It will create and maintain a sqlite database in each project directory.
 
 - It will generate (text) reports around password strength statistics for each domain.
 
 ### Getting started
 
-If after reading the very convincing description above you still want to give it a try. clone the repo or download the zip. My advice is create a symlink so you can call the "binder" command from whichever working directory.
+If after reading the very convincing description above you still want to give it a try, clone the repo or download the zip. My advice is create a symlink so you can call the "binder" command from whichever working directory.
 
 `sudo ln -s /path/to/binder/binder.py /usr/local/bin/binder`
 
