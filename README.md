@@ -13,7 +13,7 @@ An attack tool. Although it can automate some basic network discovery.
 
 - Once you have compromised a domain, feed the script with an enum file (e.g. from "enum4linux.pl") and a ntds dump file (pwdump format). It will parse them and organise the data conveniently in a sqlite db. You can then issue commands to query the data in a convenient way.
 
-- It will also automate and optimise password cracking on your shitty consultant's laptop. It does it by running appropriate John the Ripper commands (dictionaries, rules, masks [todo: markov, bruteforce]) and maintaining the database up to date.
+- It will also automate and optimise password cracking on your shitty consultant's laptop. It does it by running appropriate John the Ripper commands (dictionaries, rules, masks, markov, bruteforce) and maintaining the database up to date. The masks are optimised for domain creds and the markov stats are generated against the previously cracked passwords for the project.
 
 - It handles multiple projects which you can start, stop and resume your work on. It also handles multiple domains per project. It will create and maintain a sqlite database in each project directory.
 
@@ -35,36 +35,41 @@ Otherwise only standard python libs.
 
 **Command line arguments**
 ```
+  -h, --help            show this help message and exit
   -s <project_name>, --start <project_name>
                         Start a new project under the projects directory
   -r <project_name>, --resume <project_name>
                         Continue to work on a previously started project
   -y, --screenshot      Take a screenshot and save it in the project folder
-  -d, --discover        Run discovery phase tests
+  -D, --discover        Run discovery phase tests
+  -d <domain_name>, --domain <domain_name>
+                        Limit all actions to this domain. (i.e. when querying
+                        information)
   -x <filename>, --update_hashes <filename>
-                        Load creds into db from dump file. Provide pwdump-style file
+                        Load creds into db from dump file. Provide pwdump-
+                        style file
   -a <filename>, --update_accounts <filename>
-                        Load user and parser info into db. Provide enum4linux output file
-  -c <level>, --crack <level>
-                        Run multiple password cracking attacks. Levels: 1:
-                        single, 2: dictionaries/rules, 3: masks, 4: markov, 5:
-                        brute-force. Default: 2
-  --reset               Reset the password cracking status (if adding more
-                        hashes for the next run)
+                        Load user and parser info into db. Provide enum4linux
+                        output file
+  -c [<levels> [<levels> ...]], --crack [<levels> [<levels> ...]]
+                        Run multiple password cracking attacks. Pass a space-
+                        separated list of levels. Levels: 1: Local db, 2:
+                        single, 3: dictionaries/rules, 4: masks, 5: markov, 6:
+                        brute-force. Default: 1 2
   -g <group_name>, --group <group_name>
-                        Return group members with usernames and passwords (if cracked)
+                        Return group members with usernames and passwords (if
+                        cracked)
   -f, --flush           Delete user and parser data from db
   -p, --passwords       Display all cracked passwords
-  -m <domain_name>, --setdom <domain_name>
-                        Change the active domain
   -t <table_name>, --view <table_name>
                         Dump the contents of a database table
   -z <username>, --getpass <username>
-                        Output the user's password or otherwise NT hash (for reusing in other commands)
-  -u <username>, --username <username>
+                        Output the user's password or otherwise NT hash
+  -u <username>, --user <username>
                         Display all the information about a user.
   -o, --report          Generate a report
   -v, --verbose         Enable debug messages
+
 ```
 
 ### License

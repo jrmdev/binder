@@ -17,7 +17,7 @@ except:
 	print "[!] Please install python-sqlite3 extension."
 	sys.exit(0)
 
-__version__ = 0.2
+__version__ = 0.4
 __prog_name__ = 'binder'
 
 def main():
@@ -48,9 +48,16 @@ def main():
 		default=False)
 
 	exclusive.add_argument(
-		'-d', '--discover',
+		'-D', '--discover',
 		action='store_true',
 		help='Run discovery phase tests',
+		default=False)
+
+	parser.add_argument('-d', '--domain',
+		action='store',
+		metavar='<domain_name>',
+		dest='setdomain',
+		help='Limit all actions to this domain. (i.e. when querying information)',
 		default=False)
 
 	exclusive.add_argument(
@@ -98,12 +105,6 @@ def main():
 		help='Display all cracked passwords',
 		default=False)
 
-	parser.add_argument('-m', '--setdom',
-		action='store',
-		metavar='<domain_name>',
-		help='Change the active domain',
-		default=False)
-
 	exclusive.add_argument('-t', '--view',
 		action='store',
 		dest='view_table',
@@ -118,7 +119,7 @@ def main():
 		help='Output the user\'s password or otherwise NT hash',
 		default=False)
 
-	exclusive.add_argument('-u', '--username',
+	exclusive.add_argument('-u', '--user',
 		action='store',
 		dest='getuser',
 		metavar='<username>',
@@ -136,6 +137,8 @@ def main():
 		default=False)
 
 	global cfg
+
+
 
 	cfg = parser.parse_args()
 	cfg.prog_name = __prog_name__
@@ -168,10 +171,11 @@ def main():
 		sys.exit(1)
 
 	# Internal settings
-	cfg.db_filename = '.%s.db' % cfg.prog_name
+	cfg.db_filename = '%s.db' % cfg.prog_name
 	cfg.database    = None
 	cfg.cursor      = None
 	cfg.domain_list = []
+	cfg.domain_scope = cfg.domain_list
 
 	if not cfg.start and not cfg.resume:
 
@@ -180,6 +184,9 @@ def main():
 			sys.exit(1)
 		
 		load_config()
+
+	if cfg.setdomain:
+		set_domain(cfg.setdomain)
 
 	if cfg.crack == []:
 		cfg.crack = [1, 2]
@@ -204,9 +211,6 @@ def main():
 
 	elif cfg.group:
 		group_members(cfg.group)
-
-	elif cfg.setdom:
-		set_domain(cfg.setdom)
 
 	elif cfg.view_table:
 		view(cfg.view_table)
@@ -247,7 +251,7 @@ def use_creds(name):
 def report():
 	weak_passwords = ['password', 'p@ssword', 'password0', 'password1', 'password123', 'p@ssw0rd', 'p@ssw0rd1', 'abcd123', 'abcd1234', 'welcome1', 'welcome123', 'test']
 
-	for d in cfg.domain_list:
+	for d in cfg.domain_scope:
 		nb_accounts = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=?", (d[0],)).fetchone()
 		nb_cracked  = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(password)>0", (d[0],)).fetchone()
 		nb_da       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Domain Admins'", (d[0],)).fetchone()
@@ -273,17 +277,21 @@ def report():
 
 def set_domain(domain):
 	for d in cfg.domain_list:
-		if domain.upper() in d:
-			setconf('CURRENT_DOMAIN', domain[0])
-			setconf('CURRENT_DOMAIN_FQDN', domain[1])
-			print "[+] Current domain: %s" % str(d)
+		if d[0] == domain.upper() or d[1] == domain.upper():
+			cfg.domain_scope = [(d[0], d[1])]
+			setconf('CURRENT_DOMAIN', d[0])
+			setconf('CURRENT_DOMAIN_FQDN', d[1])
 			return
 
 	print "[!] No such domain in database."
+	sys.exit(0)
 
 def show_passwords():
 
-	req = cfg.cursor.execute("SELECT `domain`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%'")
+	if cfg.domain_scope == cfg.domain_list:
+		req = cfg.cursor.execute("SELECT `domain`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%'")
+	else:
+		req = cfg.cursor.execute("SELECT `domain`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%' AND `domain` IN (?)", [d[0] for d in cfg.domain_scope])
 
 	cpt = 0
 	for row in req.fetchall():
@@ -302,11 +310,16 @@ def show_passwords():
 def color(txt, code = 1, modifier = 0):
 	return "\033[%d;3%dm%s\033[0m" % (modifier, code, txt)
 
-def john(filename, fmt, mode):
+def john(fmt, mode):
 
-	pot_file = os.path.join(cfg.base_dir, 'john.pot')
-	sess_file = os.path.join(cfg.base_dir, 'john')
-	dict_file = os.path.join(cfg.base_dir, 'cracked_passwd.apm')
+	if fmt == 'lm':
+		filename = cfg.lm_file
+	elif fmt == 'nt':
+		filename = cfg.nt_file
+	else:
+		print "[!] Format not supported"
+		clean_exit()
+
 	#try: os.unlink(pot_file)
 	#except: pass
 
@@ -377,8 +390,8 @@ def john(filename, fmt, mode):
 		open(filename, 'wb').write('\n'.join(data))
 
 	def regen_dict_file():
-		if os.path.exists(dict_file):
-			words = map(str.strip, open(dict_file).readlines())
+		if os.path.exists(cfg.dict_file):
+			words = map(str.strip, open(cfg.dict_file).readlines())
 		else:
 			words = []
 
@@ -388,7 +401,7 @@ def john(filename, fmt, mode):
 			if row[0] not in words:
 				words.append(row[0])
 
-		open(dict_file, 'wb').write('\n'.join(words))
+		open(cfg.dict_file, 'wb').write('\n'.join(words))
 
 	def get_cracked_hashes():
 
@@ -402,7 +415,7 @@ def john(filename, fmt, mode):
 				passwd = ''.join(choice(x) for x in zip(passwd.lower(), passwd.upper()))
 			return passwd
 
-		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, pot_file, filename)
+		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, cfg.pot_file, filename)
 	
 		try:
 			ret = os.popen(command).readlines()
@@ -454,8 +467,11 @@ def john(filename, fmt, mode):
 		print "\r[+] Running local database attack on %s" % fmt
 	
 		regen_dict_file()
+
+		if nb_cracked:
+			regen_hash_file()
 	
-		run(cfg.jtr_path +' --format=%s --pot=%s --nolog --wordlist=%s %s' % (fmt, pot_file, dict_file, filename))
+		run(cfg.jtr_path +' --format=%s --pot=%s --nolog --wordlist=%s %s' % (fmt, cfg.pot_file, cfg.dict_file, filename))
 		nb_cracked = get_cracked_hashes()
 
 	if mode == 'single':
@@ -464,7 +480,7 @@ def john(filename, fmt, mode):
 		if nb_cracked:
 			regen_hash_file()
 	
-		run(cfg.jtr_path +' --format=%s --pot=%s --nolog --single %s' % (fmt, pot_file, filename))
+		run(cfg.jtr_path +' --format=%s --pot=%s --nolog --single %s' % (fmt, cfg.pot_file, filename))
 		nb_cracked = get_cracked_hashes()
 
 	if mode == 'dicts':
@@ -478,7 +494,7 @@ def john(filename, fmt, mode):
 				regen_hash_file()
 
 			pc(cpt, len(dict_list))
-			run(cfg.jtr_path +' --format=%s --session=%s --pot=%s --nolog --wordlist=%s %s --dupe-suppression %s' % (fmt, sess_file, pot_file, d[0], apply_rules(d[1]), filename))
+			run(cfg.jtr_path +' --format=%s --session=%s --pot=%s --nolog --wordlist=%s %s --dupe-suppression %s' % (fmt, cfg.sess_file, cfg.pot_file, d[0], apply_rules(d[1]), filename))
 			nb_cracked = get_cracked_hashes()
 			cpt += 1
 
@@ -496,46 +512,67 @@ def john(filename, fmt, mode):
 				regen_hash_file()
 			
 			pc(cpt, len(masks))
-			run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, sess_file, pot_file, cfg.jtr_tmout*60, m, len(m)/2, filename))
+			run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.sess_file, cfg.pot_file, cfg.jtr_tmout*60, m, len(m)/2, filename))
 			nb_cracked = get_cracked_hashes()
 			cpt += 1
 
 	if mode == 'markov':
-		print "\r[+] Running markov attack on %s for %d minutes" % (fmt, cfg.jtr_tmout)
-		pass # todo
+		print "\r[+] Running markov attack on %s" % (fmt)
+		calc_stat = os.path.join(os.path.dirname(cfg.jtr_path), 'calc_stat')
+
+		if nb_cracked:
+			regen_hash_file()
+
+		# Generate dict
+		regen_dict_file()
+
+		# Generate mkv stats from dict
+		run("%s %s %s" % (calc_stat, cfg.dict_file, cfg.mkv_file))
+
+		run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --markov=200 --max-run-time=%d --max-len=%d --mkv-stats=%s %s" % (fmt, cfg.sess_file, cfg.pot_file, cfg.jtr_tmout*60, (7 if fmt == 'lm' else 12), cfg.mkv_file, filename))
+		nb_cracked = get_cracked_hashes()
 
 	if mode == 'brute':
 		print "\r[+] Running brute-force attack on %s for %d minutes" % (fmt, cfg.jtr_tmout)
-		pass # todo
+
+		if nb_cracked:
+			regen_hash_file()
+	
+		run(cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d %s" % (fmt, cfg.pot_file, cfg.jtr_tmout*60, filename))
+		nb_cracked = get_cracked_hashes()
 
 def crack_hashes(levels=[1, 2]):
 
-	lm_file = os.path.join(cfg.base_dir, 'lm_hashes.apm')
-	nt_file = os.path.join(cfg.base_dir, 'nt_hashes.apm')
+	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
+	cfg.sess_file = os.path.join(cfg.binder_dir, 'john')
+	cfg.dict_file = os.path.join(cfg.binder_dir, 'dict.bndr')
+	cfg.lm_file   = os.path.join(cfg.binder_dir, 'lm_hashes.bndr')
+	cfg.nt_file   = os.path.join(cfg.binder_dir, 'nt_hashes.bndr')
+	cfg.mkv_file  = os.path.join(cfg.binder_dir, 'mkv_stats.bndr')
 
 	if 1 in levels:
-		john(lm_file, 'lm', 'local')
-		john(nt_file, 'nt', 'local')
+		john('lm', 'local')
+		john('nt', 'local')
 
 	if 2 in levels:
-		john(lm_file, 'lm', 'single')
-		john(nt_file, 'nt', 'single')
+		john('lm', 'single')
+		john('nt', 'single')
 
 	if 3 in levels:
-		john(lm_file, 'lm', 'dicts')
-		john(nt_file, 'nt', 'dicts')
+		john('lm', 'dicts')
+		john('nt', 'dicts')
 
 	if 4 in levels:
-		john(lm_file, 'lm', 'masks')
-		john(nt_file, 'nt', 'masks')
+		john('lm', 'masks')
+		john('nt', 'masks')
 
 	if 5 in levels:
-		john(lm_file, 'lm', 'markov')
-		john(nt_file, 'nt', 'markov')
+		john('lm', 'markov')
+		john('nt', 'markov')
 
 	if 6 in levels:
-		john(lm_file, 'lm', 'brute')
-		john(nt_file, 'nt', 'brute')
+		john('lm', 'brute')
+		john('nt', 'brute')
 
 	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchone()
 	print "[+] %d passwords cracked." % cracked[0]
@@ -756,44 +793,76 @@ def flush():
 	cfg.cursor.commit()
 	print "[+] Done."
 
-def group_members(grpname):
+def group_members(grpname, dom=None, lvl=0):
 
-	res = cfg.cursor.execute("SELECT a.`domain`, a.`group`, a.`username`, b.`descr`, b.`password` "
-		"FROM domain_groups a "
-		"LEFT JOIN domain_accounts b ON (LOWER(b.`username`)=LOWER(a.`username`)) "
-		"WHERE UPPER(a.`group`) LIKE UPPER(?) "
-		"AND b.`password` IS NOT NULL "
-		"ORDER BY a.`domain`, a.`rid`", (grpname,)).fetchall()
+	if dom == None:
+		res = cfg.cursor.execute("SELECT a.`group`, a.`domain`, a.`username` AS usr_or_grp, b.`rid` as ridb, b.`name`, b.`descr`, b.`password` "
+			"FROM domain_groups a "
+			"LEFT JOIN domain_accounts b ON (lower(a.`domain`||'\'||a.`username`)=lower(b.`domain`||'\'||b.`username`)) "
+			"WHERE UPPER(a.`group`) LIKE UPPER(?) "
+			"AND a.`domain` IN('"+ "','".join([d[0] for d in cfg.domain_scope]) +"') "
+			"GROUP BY usr_or_grp "
+			"ORDER BY a.`domain`||'\'||a.`username`", (grpname,)).fetchall()
+	
+		if len(res) == 0:
+			print "[!] Error: No such group."
+			clean_exit(1)
+	
+	else:
+			res = cfg.cursor.execute("SELECT a.`group`, a.`domain`, a.`username` AS usr_or_grp, b.`rid` as ridb, b.`name`, b.`descr`, b.`password` "
+			"FROM domain_groups a "
+			"LEFT JOIN domain_accounts b ON (lower(a.`domain`||'\'||a.`username`)=lower(b.`domain`||'\'||b.`username`)) "
+			"WHERE UPPER(a.`group`) LIKE UPPER(?) AND a.`domain`=?"
+			"ORDER BY a.`domain`||'\'||a.`username`", (grpname,dom)).fetchall()	
+
+	hdr = ' '*lvl*5 + ('\\_ ' if lvl > 0 else '')
+
+	direct_users = []
 
 	if len(res) == 0:
-		print "[!] Error: No such group."
-		clean_exit(1)
+		print hdr+"No members found."
 
 	for row in res:
-		is_group = cfg.cursor.execute('SELECT COUNT(`rid`) AS cpt FROM `domain_groups` WHERE LOWER(`domain`)=LOWER(?) AND LOWER(`group`)=LOWER(?) GROUP BY `group`', (row[0], row[2])).fetchone()
+		grp, dom, usr_or_grp, u_rid, name, desc, pswd = row
 
-		if is_group is not None:
-			print "Dom: %-12s Grp: %-20s Sub-Grp: %-20s" % (row[0][:29], row[1][:29], row[2][:29])
-			group_members(row[2])
+		if usr_or_grp == '':
+			continue
+
+		if u_rid == None: # This is a sub-group, not a username
+
+			print "%sGroup '%s' contains sub-group '%s':" % (hdr, color(dom+'\\'+grp, 2, 1), color(dom +'\\'+ usr_or_grp, 2))
+			group_members(usr_or_grp, dom, 1)
+		
 		else:
-			print "Dom: %-12s Grp: %-20s Usr: %-20s Desc: %-45s Pwd: %-30s" % (row[0][:29], row[1][:29], row[2][:29], row[3][:44], row[4])
+			if lvl == 0:
+				direct_users.append(row)
+			else:
+				print "%sGrp: %-28s     Usr: %-40s RID: %5d   Pwd: %-30s Name: %-40s Desc: %s" % (hdr, color(dom+'\\'+grp, 2, 1), color(dom +'\\'+ usr_or_grp, 3, 1), u_rid, color(pswd, 6, 1), color(name[:39], 4), color(desc, 4))
+
+	print ""
+	for usr in direct_users:
+		grp, dom, usr_or_grp, u_rid, name, desc, pswd = usr
+		print "[+] Group %s has top-level member: %-40s RID: %5d   Pwd: %-30s Name: %-40s Desc: %s" % (color(dom+'\\'+grp, 2, 1), color(dom +'\\'+ usr_or_grp, 3, 1), u_rid, color(pswd, 6, 1), color(name[:39], 4), color(desc, 4))
 
 def get_user(username):
 	
-	if '\\' in username:
-		dom, 	usr = username.split('\\')
+	if '\\' in username: # we specified the domain in the username instead of with -d
+		dom, usr = username.split('\\')
 		usr = '%'+ usr.upper() + '%'
 		res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE UPPER(`domain`)=UPPER(?) AND (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?)", (dom, usr, usr,))
 	else:
 		usr = '%'+ username.upper() + '%'
-		res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?)", (usr,usr,))
+		if cfg.domain_scope == cfg.domain_list: # Include all domains
+			res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?)", (usr,usr,))
+		else: # Filter on domain(s) specified
+			res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?) AND `domain` IN('"+ "','".join([d[0] for d in cfg.domain_scope]) +"')", (usr,usr,))
 
 	res = res.fetchall()
 
 	for row in res:
+		print color("Username : %s" % row[3], 9, 1)
 		print "RID      : %d" % row[0]
 		print "Domain   : %s" % row[2]
-		print "Username : %s" % row[3]
 		print "Password : %s" % row[4]
 		print "LM Hash  : %s" % row[5]
 		print "NT Hash  : %s" % row[6]
@@ -909,7 +978,8 @@ def load_config():
 		clean_exit(1)
 
 	cfg.base_dir        = os.path.join(cfg.project_dir, cfg.current_project)
-	cfg.database        = os.path.join(cfg.base_dir, cfg.db_filename)
+	cfg.binder_dir      = os.path.join(cfg.base_dir, '.'+cfg.prog_name)
+	cfg.database        = os.path.join(cfg.binder_dir, cfg.db_filename)
 	cfg.shots_dir       = os.path.join(cfg.base_dir, 'screenshots')
 	cfg.axfr_dir        = os.path.join(cfg.base_dir, 'axfr')
 	cfg.enum_dir        = os.path.join(cfg.base_dir, 'enum')
@@ -942,11 +1012,10 @@ def start_project(name):
 
 	setconf('CURRENT_PROJECT', name)
 
-	cfg.database = os.path.join(cfg.project_dir, name, cfg.db_filename)
-
 	print "[+] Creating configuration files..."
 	try:
 		os.mkdir(os.path.join(cfg.project_dir, name))
+		os.mkdir(os.path.join(cfg.project_dir, name, '.'+cfg.prog_name))
 		os.mkdir(os.path.join(cfg.project_dir, name, 'screenshots'))
 		os.mkdir(os.path.join(cfg.project_dir, name, 'axfr'))
 		os.mkdir(os.path.join(cfg.project_dir, name, 'enum'))
@@ -955,6 +1024,7 @@ def start_project(name):
 		pass
 
 	print "[+] Creating database..."
+	cfg.database = os.path.join(cfg.project_dir, name, '.'+cfg.prog_name, cfg.db_filename)
 	init_db(name)
 
 	print "[+] Done."
@@ -962,11 +1032,12 @@ def start_project(name):
 def resume_project(name):
 	
 	if os.path.exists(cfg.config_file):
-	
+
 		if os.path.exists(os.path.join(cfg.project_dir, name)):
 	
 			setconf('CURRENT_PROJECT', name)
-			cfg.database = os.path.join(cfg.project_dir, name, cfg.db_filename)
+			cfg.binder_dir = os.path.join(cfg.project_dir, name, '.'+cfg.prog_name)
+			cfg.database = os.path.join(cfg.binder_dir, cfg.db_filename)
 			init_db(name)
 
 			print "[+] Active project is %s" % name
@@ -981,17 +1052,17 @@ def passwd_or_hash(uname):
 	if '\\' in uname:
 		dom, usr = uname.split('\\')
 
-		res = cfg.cursor.execute("SELECT rid, domain, username, password, nt_hash  \
-			FROM domain_accounts \
-			WHERE LOWER(domain)=LOWER(?) \
-			AND LOWER(username)=LOWER(?) \
-			LIMIT 1", (dom, usr,))
+		res = cfg.cursor.execute("SELECT rid, domain, username, password, nt_hash "
+			"FROM domain_accounts "
+			"WHERE LOWER(domain)=LOWER(?) "
+			"AND LOWER(username)=LOWER(?) "
+			"LIMIT 1", (dom, usr,))
 
 	else:
-		res = cfg.cursor.execute("SELECT rid, domain, username, password, nt_hash \
-			FROM domain_accounts \
-			WHERE LOWER(username)=LOWER(?) \
-			LIMIT 1", (uname,))
+		res = cfg.cursor.execute("SELECT rid, domain, username, password, nt_hash "
+			"FROM domain_accounts "
+			"WHERE LOWER(username)=LOWER(?) "
+			"LIMIT 1", (uname,))
 
 	fetch = res.fetchall()
 
@@ -1080,9 +1151,8 @@ def run(cmd):
 		clean_exit(1)
 
 if __name__ == "__main__":
-	if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
-		sys.argv[1] = '--' + sys.argv[1]
-	elif len(sys.argv) == 1:
+
+	if len(sys.argv) == 1:
 		sys.argv.append('--help')
 
 	main()

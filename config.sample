@@ -15,6 +15,5 @@ JTR_TMOUT = 25
 ;; The following options can be left blank
 ;; They will be populated by the program
 CURRENT_PROJECT = 
-CRACK_LEVEL = 0
 CURRENT_DOMAIN = 
 CURRENT_DOMAIN_FQDN =
