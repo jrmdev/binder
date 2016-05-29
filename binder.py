@@ -451,9 +451,6 @@ def john(fmt, mode):
 				print color(">>> %s:%s" % (uname, passwd), 3)
 
 				found.append((passwd, nt_hash))
-
-		if len(found):
-			print ""
 	
 		cfg.cursor.executemany('UPDATE `domain_accounts` SET `password`=? WHERE `nt_hash`=?', found)
 		cfg.cursor.commit()
@@ -713,11 +710,12 @@ def update_hashes(file):
 	existing_users = user_list()
 
 	print "[+] Reading cracked passwords..."
-	pot_file = os.path.join(cfg.base_dir, 'john.pot')
+
+	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
 
 	cleartexts = {}
-	cracked  = run(cfg.jtr_path + ' --format=LM --pot=%s --show %s' % (pot_file, file.name))
-	cracked += run(cfg.jtr_path + ' --format=NT --pot=%s --show %s' % (pot_file, file.name))
+	cracked  = run(cfg.jtr_path + ' --format=LM --pot=%s --show %s' % (cfg.pot_file, file.name))
+	cracked += run(cfg.jtr_path + ' --format=NT --pot=%s --show %s' % (cfg.pot_file, file.name))
 
 	for l in cracked.split('\n'):
 
@@ -795,6 +793,16 @@ def flush():
 
 def group_members(grpname, dom=None, lvl=0):
 
+	def fmt(row):
+		gname = color(row[1]+'\\'+row[0], 2, 1)
+		uname = color(row[1] +'\\'+ row[2].ljust(22), 3, 1)
+		u_rid = str(row[3]).ljust(6) if row[3] is not None else None
+		desc  = color(str(row[5] if row[5] is not None else ''), 4)
+		name  = color(str(row[4] if row[4] is not None else '').ljust(20), 4)
+		pswd  = color(str(row[6] if row[6] is not None else '').ljust(13), 6, 1)
+
+		return gname, uname, u_rid, desc, name, pswd, row[1], row[2]
+
 	if dom == None:
 		res = cfg.cursor.execute("SELECT a.`group`, a.`domain`, a.`username` AS usr_or_grp, b.`rid` as ridb, b.`name`, b.`descr`, b.`password` "
 			"FROM domain_groups a "
@@ -823,26 +831,24 @@ def group_members(grpname, dom=None, lvl=0):
 		print hdr+"No members found."
 
 	for row in res:
-		grp, dom, usr_or_grp, u_rid, name, desc, pswd = row
-
-		if usr_or_grp == '':
-			continue
+		gname, uname, u_rid, desc, name, pswd, dom, usr_or_grp = fmt(row)
 
 		if u_rid == None: # This is a sub-group, not a username
 
-			print "%sGroup '%s' contains sub-group '%s':" % (hdr, color(dom+'\\'+grp, 2, 1), color(dom +'\\'+ usr_or_grp, 2))
+			print hdr+"Group '{}' contains sub-group {}".format(gname, uname)
 			group_members(usr_or_grp, dom, 1)
 		
 		else:
 			if lvl == 0:
 				direct_users.append(row)
 			else:
-				print "%sGrp: %-28s     Usr: %-40s RID: %5d   Pwd: %-30s Name: %-40s Desc: %s" % (hdr, color(dom+'\\'+grp, 2, 1), color(dom +'\\'+ usr_or_grp, 3, 1), u_rid, color(pswd, 6, 1), color(name[:39], 4), color(desc, 4))
+				print hdr+ "Grp: {} Usr: {} RID: {} Pwd: {} Name: {} Desc: {}".format(gname, uname, u_rid, pswd, name, desc)
 
 	print ""
 	for usr in direct_users:
-		grp, dom, usr_or_grp, u_rid, name, desc, pswd = usr
-		print "[+] Group %s has top-level member: %-40s RID: %5d   Pwd: %-30s Name: %-40s Desc: %s" % (color(dom+'\\'+grp, 2, 1), color(dom +'\\'+ usr_or_grp, 3, 1), u_rid, color(pswd, 6, 1), color(name[:39], 4), color(desc, 4))
+		gname, uname, u_rid, desc, name, pswd, dom, usr_or_grp = fmt(usr)
+
+		print "[+] Group {} has top-level member: {} RID: {}   Pwd: {} Name: {} Desc: {}".format(gname, uname, u_rid, pswd, name, desc)
 
 def get_user(username):
 	
