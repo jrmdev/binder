@@ -307,8 +307,6 @@ def set_domain(domain):
 	for d in cfg.domain_list:
 		if d[0] == domain.upper() or d[1] == domain.upper():
 			cfg.domain_scope = [(d[0], d[1])]
-			setconf('CURRENT_DOMAIN', d[0])
-			setconf('CURRENT_DOMAIN_FQDN', d[1])
 			return
 
 	print "[!] No such domain in database."
@@ -669,16 +667,7 @@ def handle_domains(dom_str=''):
 		dom_long = raw_input("Domain FQDN for '%s'? " % dom_str).upper()
 		cfg.cursor.execute("INSERT INTO domains(domain, fqdn) VALUES(?, ?)", (dom_short, dom_long))
 
-
-	curr_dom = getconf('CURRENT_DOMAIN')
-
-	if not len(curr_dom):
-
-		setconf('CURRENT_DOMAIN', dom_short)
-		setconf('CURRENT_DOMAIN_FQDN', dom_long)
-
-	cfg.cursor.commit()
-	
+	cfg.cursor.commit()	
 	cfg.domain_list.append((dom_short, dom_long))
 	
 	return dom_short, dom_long
@@ -929,9 +918,6 @@ def init_db(name):
 def start_project(name):
 
 	print "[+] Starting project %s..." % name
-
-	setconf('CURRENT_PROJECT', name)
-
 	print "[+] Creating configuration files..."
 	project_dir = os.path.join(cfg.project_dir, name)
 
@@ -958,8 +944,7 @@ def resume_project(name):
 	if os.path.exists(cfg.config_file):
 
 		if os.path.exists(os.path.join(cfg.project_dir, name)):
-	
-			setconf('CURRENT_PROJECT', name)
+
 			cfg.binder_dir = os.path.join(cfg.project_dir, name, '.'+cfg.prog_name)
 			cfg.database = os.path.join(cfg.binder_dir, cfg.db_filename)
 			init_db(name)
@@ -996,34 +981,6 @@ def passwd_or_hash(uname):
 	
 	rid, domain, username, password, nt_hash = fetch[0]
 	print password if password != "" else nt_hash
-
-def setconf(key, value):
-
-	# Not using ConfigParser here to keep comments and
-	# formatting inside config file
-	cfg_data = open(cfg.config_file).readlines()
-	found = False
-
-	for i in range(len(cfg_data)):
-		if cfg_data[i].startswith('%s =' % key):
-			cfg_data[i] = '%s = %s\n' % (key, value)
-			found = True
-
-	if not found:
-		cfg_data.append('\n%s = %s\n' % (key, value))
-	
-	open(cfg.config_file, 'w').write(''.join(cfg_data))
-
-	return value
-
-def getconf(key):
-	CP = ConfigParser.ConfigParser()
-	CP.read(cfg.config_file)
-
-	try:
-		return CP.get('core', key)
-	except:
-		return ''
 
 def view(table):
 	rows, columns = os.popen('stty size', 'r').read().split()
