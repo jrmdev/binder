@@ -47,12 +47,6 @@ def main():
 		help='Take a screenshot and save it in the project folder',
 		default=False)
 
-	exclusive.add_argument(
-		'-D', '--discover',
-		action='store_true',
-		help='Run discovery phase tests',
-		default=False)
-
 	parser.add_argument('-d', '--domain',
 		action='store',
 		metavar='<domain_name>',
@@ -137,9 +131,6 @@ def main():
 		default=False)
 
 	global cfg
-
-
-
 	cfg = parser.parse_args()
 	cfg.prog_name = __prog_name__
 	cfg.config_file  = os.path.join(os.path.expanduser('~'), '.%s' % cfg.prog_name)
@@ -200,9 +191,6 @@ def main():
 	elif cfg.screenshot:
 		screenshot()
 
-	elif cfg.discover:
-		discover()
-
 	elif cfg.update_hashes:
 		update_hashes(cfg.update_hashes)
 
@@ -249,21 +237,37 @@ def use_creds(name):
 	pass
 
 def report():
+	chart_data = {}
 	weak_passwords = ['password', 'p@ssword', 'password0', 'password1', 'password123', 'p@ssw0rd', 'p@ssw0rd1', 'abcd123', 'abcd1234', 'welcome1', 'welcome123', 'test']
 
+	try:
+		import pygal, lxml, cssselect, tinycss
+		gen_charts = True
+	except:
+		print "[+] Note: To enable chart generation, the following python modules are necessary: pygal, lxml, cssselect, tinycss"
+		gen_charts = False
+		pass
+
+	chart_a = {}
+	chart_b = {}
+
 	for d in cfg.domain_scope:
-		nb_accounts = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=?", (d[0],)).fetchone()
+
+		chart_a[d[0]] = []
+		chart_b[d[0]] = []
+
+		nb_accounts = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(nt_hash)>0", (d[0],)).fetchone()
 		nb_cracked  = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(password)>0", (d[0],)).fetchone()
 		nb_da       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Domain Admins'", (d[0],)).fetchone()
 		nb_ea       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Enterprise Admins'", (d[0],)).fetchone()
-		nb_lm       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND `lm_hash`!='aad3b435b51404eeaad3b435b51404ee'", (d[0],)).fetchone()
+		nb_lm       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND `lm_hash` NOT IN ('aad3b435b51404eeaad3b435b51404ee','00000000000000000000000000000000','')", (d[0],)).fetchone()
 		nb_lep      = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password)=LOWER(username)", (d[0],)).fetchone()
 		nb_weak     = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password) IN('"+ "', '".join(weak_passwords)  +"')", (d[0],)).fetchone()
 		most_used   = cfg.cursor.execute("SELECT COUNT(id) AS nb, password FROM domain_accounts WHERE password != '' AND password NOT LIKE '%???????%' AND domain=? GROUP BY password ORDER BY nb DESC LIMIT 10", (d[0],)).fetchall()
 
 		print "- Report for domain %s (%s):" % (color(d[0]), d[1])
 		print "    %s accounts in total." % color(nb_accounts[0])
-		print "    %s accounts' passwords have been cracked in a short period of time (%.f%% of total)." % (color(nb_cracked[0]), (nb_cracked[0]*100)/nb_accounts[0])
+		print "    %s accounts' passwords have been cracked in a short period of time (%.f%% of total)." % (color(nb_cracked[0]), (nb_cracked[0]*100)/nb_accounts[0] if nb_accounts[0]>0 else 1)
 		print "    %s user accounts are member of the Domain Admins group." % color(nb_da[0])
 		print "    %s user accounts are member of the Enterprise Admins group." % color(nb_ea[0])
 		print "    %s user accounts use the deprecated LM password hashing algorithm." % color(nb_lm[0])
@@ -273,7 +277,31 @@ def report():
 		print "    Most used passwords:"
 		for row in most_used:
 			print "        %s accounts use the password '%s'" % (color(row[0]), color(row[1], 3))
+			if row[0] > 9:
+				chart_b[d[0]].append((row[0], row[1]))
 		print ""
+
+		chart_a[d[0]].append((nb_accounts[0], nb_cracked[0]))
+
+	if gen_charts:
+
+		# Generating graphs if pygal is available
+		for d, vals in chart_b.items():
+
+			chart = pygal.HorizontalBar(width=500, height=60+20*len(vals), legend_box_size=10, style=pygal.style.DefaultStyle(legend_font_size=11))
+			chart.title = '%s - Most used passwords' % d
+
+			for v in vals:
+				chart.add(v[1], v[0])
+
+			chart.render_to_png(os.path.join(cfg.binder_dir, 'chart_pwd_%s.png' % d))
+
+		for d, vals in chart_a.items():
+			chart = pygal.Pie(width=200, height=200, legend_box_size=10, style=pygal.style.DefaultStyle(legend_font_size=11))
+			chart.title = '%s - Cracked passwords' % d
+			chart.add('Cracked', vals[0][1])
+			chart.add('Uncracked', vals[0][0] - vals[0][1])
+			chart.render_to_png(os.path.join(cfg.binder_dir, 'chart_cracked_%s.png' % d))
 
 def set_domain(domain):
 	for d in cfg.domain_list:
@@ -310,19 +338,16 @@ def show_passwords():
 def color(txt, code = 1, modifier = 0):
 	return "\033[%d;3%dm%s\033[0m" % (modifier, code, txt)
 
-def john(fmt, mode):
+def crack_hashes(levels=[1, 2]):
 
-	if fmt == 'lm':
-		filename = cfg.lm_file
-	elif fmt == 'nt':
-		filename = cfg.nt_file
-	else:
-		print "[!] Format not supported"
-		clean_exit()
+	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
+	cfg.sess_file = os.path.join(cfg.binder_dir, 'john')
+	cfg.dict_file = os.path.join(cfg.binder_dir, 'dict.bndr')
+	cfg.hash_file = os.path.join(cfg.binder_dir, 'hashes.bndr')
+	cfg.mkv_file  = os.path.join(cfg.binder_dir, 'mkv_stats.bndr')
 
-	#try: os.unlink(pot_file)
-	#except: pass
 
+	# start functions
 	def recursive_file_listing(path, exts):
 		ret = []
 		for root, directories, filenames in os.walk(path):
@@ -340,9 +365,9 @@ def john(fmt, mode):
 		seen = set()
 		return [x for x in ret if not (x in seen or seen.add(x))]
 
-	def pc(i, tot):
+	def pc(mode, i, tot):
 		pc = i*100 / tot
-		sys.stdout.write('--- %s: %s: %d%%                \r' % (fmt, mode, pc))
+		sys.stdout.write('--- %s attack: %d%%                \r' % (mode, pc))
 		sys.stdout.flush()
 
 	def apply_rules(file_size):
@@ -351,16 +376,16 @@ def john(fmt, mode):
 		def Kb(i): return i * 1024
 
 		# Enable some rules according to dict size
-		if file_size < Mb(50):
+		if file_size < Mb(70):
 			return '--rules:Wordlist'
 		
-		if file_size < Mb(1):
+		if file_size < Mb(1.5):
 			return '--rules:Extra'
 
-		if file_size < Kb(200):
+		if file_size < Kb(300):
 			return '--rules:Jumbo'
 
-		if file_size < Kb(1):
+		if file_size < Kb(2):
 			return '--rules:All'
 
 		return ''
@@ -374,36 +399,28 @@ def john(fmt, mode):
 
 		return dict_list
 
-	def regen_hash_file():
+	def generate_hash_file():
 		res = cfg.cursor.execute("SELECT `username`, `rid`, `lm_hash`, `nt_hash` FROM domain_accounts WHERE `password`=''").fetchall()
 
-		data = []
+		f = open(cfg.hash_file, 'wb')
 		for row in res:
-			line = '%s:%s:%s:%s:::' % (row[0], row[1], row[2], row[3])
-			
-			if fmt == 'nt' and row[2] == 'aad3b435b51404eeaad3b435b51404ee':
-				data.append(line)
-			
-			if fmt == 'lm' and row[2] != 'aad3b435b51404eeaad3b435b51404ee':
-				data.append(line)
+			f.write('%s:%s:%s:%s:::\n' % (row[0], row[1], row[2], row[3]))
+		f.close()
 
-		open(filename, 'wb').write('\n'.join(data))
-
-	def regen_dict_file():
+	def update_dict_file():
 		if os.path.exists(cfg.dict_file):
 			words = map(str.strip, open(cfg.dict_file).readlines())
 		else:
 			words = []
 
-		res = cfg.cursor.execute("SELECT `password` FROM domain_accounts WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchall()
+		res = cfg.cursor.execute("SELECT DISTINCT `password` FROM domain_accounts WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchall()
 
 		for row in res:
-			if row[0] not in words:
-				words.append(row[0])
+			words.append(row[0])
 
-		open(cfg.dict_file, 'wb').write('\n'.join(words))
+		open(cfg.dict_file, 'wb').write('\n'.join(set(words)))
 
-	def get_cracked_hashes():
+	def get_cracked_hashes(fmt='nt'):
 
 		def find_good_case(passwd, nt_hash):
 		
@@ -415,7 +432,7 @@ def john(fmt, mode):
 				passwd = ''.join(choice(x) for x in zip(passwd.lower(), passwd.upper()))
 			return passwd
 
-		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, cfg.pot_file, filename)
+		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, cfg.pot_file, cfg.hash_file)
 	
 		try:
 			ret = os.popen(command).readlines()
@@ -432,7 +449,7 @@ def john(fmt, mode):
 				continue
 			
 			output = output.strip()
-			output = output.decode('utf-8')
+			#output = output.decode('utf-8')
 			tab = output.split(':')
 
 			# special case when there is a ':' in the password
@@ -448,128 +465,96 @@ def john(fmt, mode):
 				if fmt == 'lm':
 					passwd = find_good_case(passwd, nt_hash)
 
-				print color(">>> %s:%s" % (uname, passwd), 3)
+				if nt_hash not in cracked_in_session:
 
-				found.append((passwd, nt_hash))
+					sys.stdout.write("%s\033[0;33m>>> %s:%s\033[0m" % ("\n" if len(found) else '', uname, passwd))
+					sys.stdout.flush()
+
+					if (passwd, nt_hash) not in found:
+						found.append((passwd, nt_hash))
 	
-		cfg.cursor.executemany('UPDATE `domain_accounts` SET `password`=? WHERE `nt_hash`=?', found)
-		cfg.cursor.commit()
+					cracked_in_session.append(nt_hash)
+
+		if len(found):
+
+			print ""
+			cfg.cursor.executemany('UPDATE `domain_accounts` SET `password`=? WHERE `nt_hash`=?', found)
+			cfg.cursor.commit()
 
 		return len(found)
 
-	##### end fcts #####
-	nb_cracked = 1
+	# end functions
 
-	if mode == 'local':
-		print "\r[+] Running local database attack on %s" % fmt
-	
-		regen_dict_file()
+	generate_hash_file()
+	cracked_in_session = []
 
-		if nb_cracked:
-			regen_hash_file()
-	
-		run(cfg.jtr_path +' --format=%s --pot=%s --nolog --wordlist=%s %s' % (fmt, cfg.pot_file, cfg.dict_file, filename))
-		nb_cracked = get_cracked_hashes()
-
-	if mode == 'single':
-		print "\r[+] Running single mode attack on %s" % fmt
-	
-		if nb_cracked:
-			regen_hash_file()
-	
-		run(cfg.jtr_path +' --format=%s --pot=%s --nolog --single %s' % (fmt, cfg.pot_file, filename))
-		nb_cracked = get_cracked_hashes()
-
-	if mode == 'dicts':
-		dict_list = get_dict_list()	
-		cpt = 0
-
-		print "\r[+] Running dictionary attack on %s with %d wordlists" % (fmt, len(dict_list))
-		for d in dict_list:
-
-			if nb_cracked:
-				regen_hash_file()
-
-			pc(cpt, len(dict_list))
-			run(cfg.jtr_path +' --format=%s --session=%s --pot=%s --nolog --wordlist=%s %s --dupe-suppression %s' % (fmt, cfg.sess_file, cfg.pot_file, d[0], apply_rules(d[1]), filename))
-			nb_cracked = get_cracked_hashes()
-			cpt += 1
-
-	if mode == 'masks':
-		masks = ['?1?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3?3','?1?2?2?2?3?3?3?3','?1?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3','?1?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?3','?1?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?2?3','?1?3?3?3?3?3?3?3?4','?1?2?2?2?2?2?2?3?3?3','?1?2?3?3?3?3?3?3','?1?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?2?3?3','?3?3?3?3?3?4?1?3?2','?1?2?2?2?2?2?3','?2?1?3?3?3?3?3?3','?1?4?2?2?3?3?3?3?3']
-		cpt = 0
-
-		if fmt == 'lm':
-			masks = filter_lm_masks(masks)
-
-		print "\r[+] Running mask attack on %s with %d masks" % (fmt, len(masks))
-		for m in masks:
-
-			if nb_cracked:
-				regen_hash_file()
-			
-			pc(cpt, len(masks))
-			run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.sess_file, cfg.pot_file, cfg.jtr_tmout*60, m, len(m)/2, filename))
-			nb_cracked = get_cracked_hashes()
-			cpt += 1
-
-	if mode == 'markov':
-		print "\r[+] Running markov attack on %s" % (fmt)
-		calc_stat = os.path.join(os.path.dirname(cfg.jtr_path), 'calc_stat')
-
-		if nb_cracked:
-			regen_hash_file()
-
-		# Generate dict
-		regen_dict_file()
-
-		# Generate mkv stats from dict
-		run("%s %s %s" % (calc_stat, cfg.dict_file, cfg.mkv_file))
-
-		run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --markov=200 --max-run-time=%d --max-len=%d --mkv-stats=%s %s" % (fmt, cfg.sess_file, cfg.pot_file, cfg.jtr_tmout*60, (7 if fmt == 'lm' else 12), cfg.mkv_file, filename))
-		nb_cracked = get_cracked_hashes()
-
-	if mode == 'brute':
-		print "\r[+] Running brute-force attack on %s for %d minutes" % (fmt, cfg.jtr_tmout)
-
-		if nb_cracked:
-			regen_hash_file()
-	
-		run(cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d %s" % (fmt, cfg.pot_file, cfg.jtr_tmout*60, filename))
-		nb_cracked = get_cracked_hashes()
-
-def crack_hashes(levels=[1, 2]):
-
-	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
-	cfg.sess_file = os.path.join(cfg.binder_dir, 'john')
-	cfg.dict_file = os.path.join(cfg.binder_dir, 'dict.bndr')
-	cfg.lm_file   = os.path.join(cfg.binder_dir, 'lm_hashes.bndr')
-	cfg.nt_file   = os.path.join(cfg.binder_dir, 'nt_hashes.bndr')
-	cfg.mkv_file  = os.path.join(cfg.binder_dir, 'mkv_stats.bndr')
+	# for local, single, dicts, and markov attacks, there
+	# is no point to try to crack lm hashes, as the speed
+	# gain is minimal and it will have the extra cost of
+	# having to find the correct case.
 
 	if 1 in levels:
-		john('lm', 'local')
-		john('nt', 'local')
+
+		print "\r[+] Running local database attack..."
+		update_dict_file()
+		run(cfg.jtr_path +' --format=nt --pot=%s --nolog --wordlist=%s %s' % (cfg.pot_file, cfg.dict_file, cfg.hash_file))
+		nb_cracked = get_cracked_hashes()
 
 	if 2 in levels:
-		john('lm', 'single')
-		john('nt', 'single')
+
+		print "\r[+] Running single mode attack..."
+		run(cfg.jtr_path +' --format=nt --pot=%s --nolog --single %s' % (cfg.pot_file, cfg.hash_file))
+		nb_cracked = get_cracked_hashes()
 
 	if 3 in levels:
-		john('lm', 'dicts')
-		john('nt', 'dicts')
+
+		cpt = 0
+		dict_list = get_dict_list()	
+		print "\r[+] Running dictionary attack with %d wordlists..." % len(dict_list)
+
+		for d in dict_list:
+			pc('dicts', cpt, len(dict_list))
+			run(cfg.jtr_path +' --format=nt --session=%s --pot=%s --wordlist=%s %s --dupe-suppression %s' % (cfg.sess_file, cfg.pot_file, d[0], apply_rules(d[1]), cfg.hash_file))
+			nb_cracked = get_cracked_hashes()
+			cpt += 1
 
 	if 4 in levels:
-		john('lm', 'masks')
-		john('nt', 'masks')
+
+		cpt = 0
+
+		for fmt in ['lm', 'nt']:
+
+			masks = ['?1?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3?3','?1?2?2?2?3?3?3?3','?1?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3','?1?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?3','?1?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?2?3','?1?3?3?3?3?3?3?3?4','?1?2?2?2?2?2?2?3?3?3','?1?2?3?3?3?3?3?3','?1?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?2?3?3','?3?3?3?3?3?4?1?3?2','?1?2?2?2?2?2?3','?2?1?3?3?3?3?3?3','?1?4?2?2?3?3?3?3?3']
+			
+			if fmt == 'lm':
+				masks = filter_lm_masks(masks)
+
+			print "\r[+] Running mask attack on %s with %d masks..." % (fmt, len(masks))
+		
+			for m in masks:
+				
+				pc('masks', cpt, len(masks))
+				run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.sess_file, cfg.pot_file, (cfg.jtr_tmout*60)/len(masks), m, len(m)/2, cfg.hash_file))
+				nb_cracked = get_cracked_hashes(fmt)
+				cpt += 1
 
 	if 5 in levels:
-		john('lm', 'markov')
-		john('nt', 'markov')
+
+		print "\r[+] Running markov attack..."
+		update_dict_file()
+
+		# Generate mkv stats from dict
+		run("%s %s %s" % (os.path.join(os.path.dirname(cfg.jtr_path), 'calc_stat'), cfg.dict_file, cfg.mkv_file))
+		run(cfg.jtr_path +" --format=nt --session=%s --pot=%s --nolog --markov=200 --max-run-time=%d --max-len=13 --mkv-stats=%s %s" % (cfg.sess_file, cfg.pot_file, cfg.jtr_tmout*60, cfg.mkv_file, cfg.hash_file))
+		nb_cracked = get_cracked_hashes()
 
 	if 6 in levels:
-		john('lm', 'brute')
-		john('nt', 'brute')
+
+		for fmt in ['lm', 'nt']:
+
+			print "\r[+] Running brute-force attack on %s for %d minutes..." % (fmt, cfg.jtr_tmout)
+			run(cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d %s" % (fmt, cfg.pot_file, cfg.jtr_tmout*60, cfg.hash_file))
+			nb_cracked = get_cracked_hashes(fmt)
 
 	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchone()
 	print "[+] %d passwords cracked." % cracked[0]
@@ -598,7 +583,7 @@ def update_accounts(file):
 	print "[+] Reading groups..."
 	for l in file.readlines():
 		l = l.strip()
-		l = l.decode('utf-8')
+		l = l.decode('latin1', 'ignore').encode('utf8', 'ignore')
 
 		if l.startswith('Domain Name: '):
 			domain = l.split(' ', 3)
@@ -609,6 +594,10 @@ def update_accounts(file):
 
 			try:
 				_, rid, _, usr, name, desc = res.groups()
+
+				if usr.startswith(('IUSR_', 'IWAM_', 'SUPPORT_')):
+					continue
+
 				rid = int(rid, 16)
 
 				if not len(dom_short):
@@ -696,12 +685,23 @@ def handle_domains(dom_str=''):
 
 def update_hashes(file):
 
-	for k in range(len(cfg.domain_list)):
-		print "[%d] %s" % (k, cfg.domain_list[k][0])
-	print "[%d] New domain" % len(cfg.domain_list)
-	print ""
+	res = -1
+	while res not in range(0, len(cfg.domain_list) + 1):
 
-	res = int(raw_input('Which domain is this for? ').strip())
+		for k in range(len(cfg.domain_list)):
+			print "[%d] %s" % (k, cfg.domain_list[k][0])
+		print "[%d] New domain" % len(cfg.domain_list)
+		print ""
+
+		try:
+			res = int(raw_input('Which domain is this for? ').strip())
+
+		except KeyboardInterrupt:
+			clean_exit(0)
+
+		except:
+			continue
+
 	if res == len(cfg.domain_list):
 		curr_dom, dom_long = handle_domains()
 	else:
@@ -722,7 +722,7 @@ def update_hashes(file):
 		if ':::' not in l: continue
 		
 		l = l.strip()
-		l = l.decode('utf-8')
+		l = l.decode('latin1', 'ignore').encode('utf8', 'ignore')
 		tab = l.split(':')
 
 		# special case when there is a ':' in the password
@@ -740,17 +740,20 @@ def update_hashes(file):
 		if ':::' not in l or '$' in l: continue
 		
 		l = l.strip()
-		l = l.decode('utf-8')
+		l = l.decode('latin1', 'ignore').encode('utf8', 'ignore')
 		tab = l.split(':')
 		tab[0] = tab[0].replace('(current)', '')
-		try:
-			rid, uname, lm_hash, nt_hash = int(tab[1]), tab[0], tab[2], tab[3]
-		except:
-			pass
+		tab[0] = tab[0].replace('(current-disabled)', '')
 
-		# Skip machine accounts
-		if uname.endswith('$'):
+		# Skip password history, service accounts and machine accounts
+		if '(hist_' in tab[0] or tab[0].startswith(('IUSR_', 'IWAM_', 'SUPPORT_')) or tab[0].endswith('$'):
 			continue
+
+		tab[1] = re.sub("[^0-9]", "", tab[1])
+		rid, uname, lm_hash, nt_hash = int(tab[1]) if len(tab[1]) else 0, tab[0], tab[2], tab[3]
+
+		if lm_hash.lower() in ['no password*********************', '00000000000000000000000000000000']:
+			lm_hash = 'aad3b435b51404eeaad3b435b51404ee'
 
 		password = cleartexts[nt_hash] if nt_hash in cleartexts else ''
 
@@ -879,97 +882,6 @@ def get_user(username):
 		print "\nGroup Memberships:\n   - %s" % '\n   - '.join(["%s (%d)" % (x[1], x[0]) for x in set(grps)])
 		print ""
 
-def discover():
-
-	print "[+] Starting discovery..."
-	ifconfig = run('/sbin/ifconfig -a')
-	route    = run('/sbin/route -n')
-	resolv   = run('/bin/cat /etc/resolv.conf.dhclient-new')
-
-	if getconf('CURRENT_DOMAIN_FQDN') == '':
-		for line in resolv.strip().split('\n'):
-			if line.split()[0] == 'domain':
-				fqdn = line.split()[1]
-			if line.split()[0] == 'nameserver':
-				first_ns = line.split()[1]
-
-		setconf('CURRENT_DOMAIN_FQDN', fqdn.upper())
-		print "[+] Found domain: %s" % fqdn.upper()
-	else:
-		fqdn = getconf('CURRENT_DOMAIN_FQDN')
-		print "[+] Using domain: %s" % fqdn
-
-	# Finding domain short name from FQDN
-	dom_short_name = ''
-	nmb = run('nmblookup -A %s %s ' % (fqdn, first_ns)).split('\n')
-	for l in nmb:
-		if '<00> - <GROUP>' in l:
-			dom_short_name = l.strip().split(' ')[0]
-			break
-
-	if len(dom_short_name):
-		cfg.cursor.execute('INSERT OR REPLACE INTO domains(domain,fqdn) VALUES (?, ?)', (dom_short_name.upper(), fqdn.upper()))
-
-	print "[+] Looking for domain controllers..."
-	nslookup = run('/usr/bin/nslookup %s %s' % (fqdn.lower(), first_ns))
-	dc_resolv = run('/usr/bin/host -t srv _ldap._tcp.dc._msdcs.%s %s' % (fqdn.lower(), first_ns))
-
-	domain_controllers = []
-	for line in dc_resolv.strip().split('\n'):
-		if 'has SRV record' in line:
-			dc_name = line.split()[-1]
-			dc_ip = socket.gethostbyname(dc_name)
-			print '  o', dc_ip, dc_name
-
-			domain_controllers.append('%s %s' % (dc_ip, dc_name))
-			cfg.cursor.execute('INSERT INTO domain_controllers(domain, hostname, ipaddr, allow_axfr, allow_anon_enum) VALUES (?, ?, ?, ?, ?)', (fqdn, dc_name, dc_ip, 0, 0))
-
-	domain_controllers = list(set(domain_controllers))
-
-	print "[+] Attempting zone transfers..."
-
-	for line in domain_controllers:
-		ip = line.split()[0]
-		axfr = run('/usr/bin/host -t axfr %s %s' % (fqdn, ip))
-
-		if 'Transfer failed' in axfr or 'connection timed out' in axfr or 'connection refused' in axfr:
-			print '  o', '%15s:' % ip, 'Transfer failed'
-		
-		else:
-			cfg.cursor.execute('UPDATE domain_controllers SET allow_axfr=1 WHERE ipaddr=?', (ip,))
-			print '  o', '%15s:' % ip, 'Transfer succeeded'
-		
-		output_filename = os.path.join(cfg.axfr_dir, '%s.txt' % ip)
-		open(output_filename, 'w').write(axfr)
-
-	print "[+] Attempting anonymous NetBIOS enumeration..."
-
-	for line in domain_controllers:
-		ip = line.split()[0]
-		enum = run('/usr/bin/rpcclient -U "" %s --no-pass -c enumdomusers' % ip)
-
-		if 'NT_STATUS_ACCESS_DENIED' in enum:
-			print '  o', '%15s:' % ip, 'Enumeration failed'
-		
-		else:
-			cfg.cursor.execute('UPDATE domain_controllers SET allow_anon_enum=1 WHERE ipaddr=?', (ip,))
-			print '  o', '%15s:' % ip, 'Enumeration succeeded'
-	
-		output_filename = os.path.join(cfg.enum_dir, '%s.txt' % ip)
-		open(output_filename, 'w').write(enum)
-
-	print "[+] Saving files..."
-	open(os.path.join(cfg.base_dir, 'ifconfig.txt'),           'w').write(ifconfig)
-	open(os.path.join(cfg.base_dir, 'route.txt'),              'w').write(route)
-	open(os.path.join(cfg.base_dir, 'resolv.txt'),             'w').write(resolv)
-	open(os.path.join(cfg.base_dir, 'nslookup.txt'),           'w').write(nslookup)
-	open(os.path.join(cfg.base_dir, 'dc_resolv.txt'),          'w').write(dc_resolv)
-	open(os.path.join(cfg.base_dir, 'domain_controllers.txt'), 'w').write('\n'.join(domain_controllers))
-
-	cfg.cursor.commit()
-
-	print "[+] Finished."
-
 def screenshot():
 
 	filename = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S") + '.png'
@@ -996,12 +908,14 @@ def load_config():
 		clean_exit(1)
 
 	cfg.cursor = sqlite3.connect(cfg.database)
+	cfg.cursor.text_factory = str
 
 	res = cfg.cursor.execute("SELECT `domain`, `fqdn` FROM domains").fetchall()
 	for row in res:
 		cfg.domain_list.append((row[0], row[1]))
 
 def init_db(name):
+
 	if not os.path.exists(cfg.database):
 		cfg.cursor = sqlite3.connect(cfg.database)
 		cfg.cursor.execute('CREATE TABLE domain_accounts (id INTEGER PRIMARY KEY, rid, domain varchar(32), username varchar(32), password varchar(32), lm_hash varchar(32), nt_hash varchar(32), name varchar(32), descr varchar(32), active INTEGER)')
@@ -1019,18 +933,22 @@ def start_project(name):
 	setconf('CURRENT_PROJECT', name)
 
 	print "[+] Creating configuration files..."
+	project_dir = os.path.join(cfg.project_dir, name)
+
+	if not os.path.exists(project_dir):
+		os.mkdir(project_dir)
+	
 	try:
-		os.mkdir(os.path.join(cfg.project_dir, name))
-		os.mkdir(os.path.join(cfg.project_dir, name, '.'+cfg.prog_name))
-		os.mkdir(os.path.join(cfg.project_dir, name, 'screenshots'))
-		os.mkdir(os.path.join(cfg.project_dir, name, 'axfr'))
-		os.mkdir(os.path.join(cfg.project_dir, name, 'enum'))
-		os.mkdir(os.path.join(cfg.project_dir, name, 'scans'))
+		os.mkdir(os.path.join(project_dir, '.'+cfg.prog_name))
+		os.mkdir(os.path.join(project_dir, 'screenshots'))
+		os.mkdir(os.path.join(project_dir, 'axfr'))
+		os.mkdir(os.path.join(project_dir, 'enum'))
+		os.mkdir(os.path.join(project_dir, 'scans'))
 	except:
 		pass
 
 	print "[+] Creating database..."
-	cfg.database = os.path.join(cfg.project_dir, name, '.'+cfg.prog_name, cfg.db_filename)
+	cfg.database = os.path.join(project_dir, '.'+cfg.prog_name, cfg.db_filename)
 	init_db(name)
 
 	print "[+] Done."
