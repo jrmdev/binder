@@ -99,13 +99,6 @@ def main():
 		help='Display all cracked passwords',
 		default=False)
 
-	exclusive.add_argument('-t', '--view',
-		action='store',
-		dest='view_table',
-		metavar='<table_name>',
-		help='Dump the contents of a database table',
-		default=False)
-
 	exclusive.add_argument('-z', '--getpass',
 		action='store',
 		dest='getpass',
@@ -200,9 +193,6 @@ def main():
 	elif cfg.group:
 		group_members(cfg.group)
 
-	elif cfg.view_table:
-		view(cfg.view_table)
-
 	elif cfg.flush:
 		flush()
 
@@ -242,30 +232,27 @@ def report():
 
 	try:
 		import pygal, lxml, cssselect, tinycss
+		from collections import OrderedDict
 		gen_charts = True
 	except:
 		print "[+] Note: To enable chart generation, the following python modules are necessary: pygal, lxml, cssselect, tinycss"
 		gen_charts = False
 		pass
 
-	chart_a = {}
-	chart_b = {}
-
 	for d in cfg.domain_scope:
 
-		chart_a[d[0]] = []
-		chart_b[d[0]] = []
+		dom_name, dom_fqdn = d
 
-		nb_accounts = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(nt_hash)>0", (d[0],)).fetchone()
-		nb_cracked  = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(password)>0", (d[0],)).fetchone()
-		nb_da       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Domain Admins'", (d[0],)).fetchone()
-		nb_ea       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Enterprise Admins'", (d[0],)).fetchone()
-		nb_lm       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND `lm_hash` NOT IN ('aad3b435b51404eeaad3b435b51404ee','00000000000000000000000000000000','')", (d[0],)).fetchone()
-		nb_lep      = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password)=LOWER(username)", (d[0],)).fetchone()
-		nb_weak     = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password) IN('"+ "', '".join(weak_passwords)  +"')", (d[0],)).fetchone()
-		most_used   = cfg.cursor.execute("SELECT COUNT(id) AS nb, password FROM domain_accounts WHERE password != '' AND password NOT LIKE '%???????%' AND domain=? GROUP BY password ORDER BY nb DESC LIMIT 10", (d[0],)).fetchall()
+		nb_accounts = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(nt_hash)>0", (dom_name,)).fetchone()
+		nb_cracked  = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(password)>0", (dom_name,)).fetchone()
+		nb_da       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Domain Admins'", (dom_name,)).fetchone()
+		nb_ea       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Enterprise Admins'", (dom_name,)).fetchone()
+		nb_lm       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND `lm_hash` NOT IN ('aad3b435b51404eeaad3b435b51404ee','00000000000000000000000000000000','')", (dom_name,)).fetchone()
+		nb_lep      = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password)=LOWER(username)", (dom_name,)).fetchone()
+		nb_weak     = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password) IN('"+ "', '".join(weak_passwords)  +"')", (dom_name,)).fetchone()
+		most_used   = cfg.cursor.execute("SELECT COUNT(id) AS nb, password FROM domain_accounts WHERE password != '' AND password NOT LIKE '%???????%' AND domain=? GROUP BY password ORDER BY nb DESC LIMIT 10", (dom_name,)).fetchall()
 
-		print "- Report for domain %s (%s):" % (color(d[0]), d[1])
+		print "- Report for domain %s (%s):" % (color(dom_name), dom_fqdn)
 		print "    %s accounts in total." % color(nb_accounts[0])
 		print "    %s accounts' passwords have been cracked in a short period of time (%.f%% of total)." % (color(nb_cracked[0]), (nb_cracked[0]*100)/nb_accounts[0] if nb_accounts[0]>0 else 1)
 		print "    %s user accounts are member of the Domain Admins group." % color(nb_da[0])
@@ -277,31 +264,69 @@ def report():
 		print "    Most used passwords:"
 		for row in most_used:
 			print "        %s accounts use the password '%s'" % (color(row[0]), color(row[1], 3))
-			if row[0] > 9:
-				chart_b[d[0]].append((row[0], row[1]))
 		print ""
 
-		chart_a[d[0]].append((nb_accounts[0], nb_cracked[0]))
+		# Generating charts if pygal is available
+		if gen_charts:
 
-	if gen_charts:
+			if nb_cracked[0]<10:
+				continue
 
-		# Generating graphs if pygal is available
-		for d, vals in chart_b.items():
+			chart_style = pygal.style.DefaultStyle(legend_font_size=11, value_font_size=9, background='#FFF')
 
-			chart = pygal.HorizontalBar(width=500, height=60+20*len(vals), legend_box_size=10, style=pygal.style.DefaultStyle(legend_font_size=11))
-			chart.title = '%s - Most used passwords' % d
+			# chart - most used pwds
+			chart_1 = pygal.HorizontalBar(width=500, height=60+20*len([(x[0], x[1]) for x in most_used if x[0] >= 10]), legend_box_size=10, style=chart_style)
+			chart_1.title = '%s - Most used passwords' % dom_name
 
-			for v in vals:
-				chart.add(v[1], v[0])
+			for row in [(x[0], x[1]) for x in most_used if x[0] >= 10]:
+				chart_1.add(row[1], row[0])
+			
+			chart_1.render_to_png(os.path.join(cfg.binder_dir, '%s.mostused.png' % dom_name))
 
-			chart.render_to_png(os.path.join(cfg.binder_dir, 'chart_pwd_%s.png' % d))
 
-		for d, vals in chart_a.items():
-			chart = pygal.Pie(width=200, height=200, legend_box_size=10, style=pygal.style.DefaultStyle(legend_font_size=11))
-			chart.title = '%s - Cracked passwords' % d
-			chart.add('Cracked', vals[0][1])
-			chart.add('Uncracked', vals[0][0] - vals[0][1])
-			chart.render_to_png(os.path.join(cfg.binder_dir, 'chart_cracked_%s.png' % d))
+			# chart - lm/nt cracked/uncracked
+			res = cfg.cursor.execute("SELECT CASE WHEN `lm_hash`='aad3b435b51404eeaad3b435b51404ee' THEN 'NT' ELSE 'LM' END AS type, "
+									"CASE WHEN `password`='' THEN 'Uncracked' ELSE 'Cracked' END AS is_cracked, COUNT(`password`) AS result "
+									"FROM `domain_accounts` WHERE `domain`=? and LENGTH(`nt_hash`)>0 "
+									"GROUP BY type, is_cracked", (dom_name,)).fetchall()
+
+			chart_2 = pygal.Pie(width=300, height=300, legend_at_bottom=True, print_values=True, legend_at_bottom_columns=2, 
+				value_formatter=lambda x: '%d (%d%%)' % (x, x*100/nb_accounts[0] if nb_accounts[0]>0 else 1),
+				 inner_radius=.4, style=chart_style)
+
+			chart_2.title = '%s - Cracked passwords per algorithm' % dom_name
+
+			for row in res:
+				chart_2.add('%s - %s' % (row[0], row[1]), row[2])
+
+			chart_2.render_to_png(os.path.join(cfg.binder_dir, '%s.cracked.png' % dom_name))
+
+			# chart - password lenghts
+			res = cfg.cursor.execute("SELECT LENGTH(`password`) AS nb_chars, COUNT(id) AS sum "
+									"FROM `domain_accounts` "
+									"WHERE `domain`=? AND nb_chars>0 AND LENGTH(`nt_hash`)>0 "
+									"GROUP BY nb_chars ORDER BY nb_chars ASC", (dom_name,)).fetchall()
+
+			lengths_dict = OrderedDict({6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0})
+
+			for row in res:
+
+				if   row[0] <= 6:  lengths_dict[6]      += row[1]
+				elif row[0] >= 12: lengths_dict[12]     += row[1]
+				else:              lengths_dict[row[0]] += row[1]
+
+			chart_3 = pygal.Bar(width=600, height=300, style=chart_style)
+			chart_3.title = '%s - Password Lengths' % dom_name
+
+			for l in lengths_dict:
+				if   l == 6:  s = '6 chars or less'
+				elif l == 12: s = '12 chars or more'
+				else: s = str(l) + ' chars'
+				chart_3.add(s, lengths_dict[l])
+
+			chart_3.render_to_png(os.path.join(cfg.binder_dir, '%s.lengths.png' % dom_name))
+
+
 
 def set_domain(domain):
 	for d in cfg.domain_list:
@@ -512,7 +537,7 @@ def crack_hashes(levels=[1, 2]):
 
 		for d in dict_list:
 			pc('dicts', cpt, len(dict_list))
-			run(cfg.jtr_path +' --format=nt --session=%s --pot=%s --wordlist=%s %s --dupe-suppression %s' % (cfg.sess_file, cfg.pot_file, d[0], apply_rules(d[1]), cfg.hash_file))
+			run(cfg.jtr_path +' --format=nt --session=%s.dict --pot=%s --wordlist=%s %s --nolog --dupe-suppression %s' % (cfg.sess_file, cfg.pot_file, d[0], apply_rules(d[1]), cfg.hash_file))
 			nb_cracked = get_cracked_hashes()
 			cpt += 1
 
@@ -532,7 +557,7 @@ def crack_hashes(levels=[1, 2]):
 			for m in masks:
 				
 				pc('masks', cpt, len(masks))
-				run(cfg.jtr_path +" --format=%s --session=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.sess_file, cfg.pot_file, (cfg.jtr_tmout*60)/len(masks), m, len(m)/2, cfg.hash_file))
+				run(cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.pot_file, (cfg.jtr_tmout*60)/len(masks), m, len(m)/2, cfg.hash_file))
 				nb_cracked = get_cracked_hashes(fmt)
 				cpt += 1
 
@@ -543,15 +568,23 @@ def crack_hashes(levels=[1, 2]):
 
 		# Generate mkv stats from dict
 		run("%s %s %s" % (os.path.join(os.path.dirname(cfg.jtr_path), 'calc_stat'), cfg.dict_file, cfg.mkv_file))
-		run(cfg.jtr_path +" --format=nt --session=%s --pot=%s --nolog --markov=200 --max-run-time=%d --max-len=13 --mkv-stats=%s %s" % (cfg.sess_file, cfg.pot_file, cfg.jtr_tmout*60, cfg.mkv_file, cfg.hash_file))
+		run(cfg.jtr_path +" --format=nt --pot=%s --nolog --markov=200 --max-run-time=%d --max-len=13 --mkv-stats=%s %s" % (cfg.pot_file, cfg.jtr_tmout*60, cfg.mkv_file, cfg.hash_file))
 		nb_cracked = get_cracked_hashes()
 
 	if 6 in levels:
 
+		from multiprocessing import cpu_count
+
 		for fmt in ['lm', 'nt']:
 
 			print "\r[+] Running brute-force attack on %s for %d minutes..." % (fmt, cfg.jtr_tmout)
-			run(cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d %s" % (fmt, cfg.pot_file, cfg.jtr_tmout*60, cfg.hash_file))
+
+			if not os.path.exists('%s.%s.bf.rec' % (cfg.sess_file, fmt)):
+				run(cfg.jtr_path +" --format=%s --session=%s.%s.bf --pot=%s --nolog --incremental=%s --max-len=%d --max-run-time=%d --fork=%d %s" % 
+					(fmt, cfg.sess_file, fmt, cfg.pot_file, 'lm_ascii' if fmt == 'lm' else 'ascii', 7 if fmt == 'lm' else 12, cfg.jtr_tmout*60, cpu_count(), cfg.hash_file))
+			else:
+				run(cfg.jtr_path +" --restore=%s.%s.bf" % (cfg.sess_file, fmt))
+			
 			nb_cracked = get_cracked_hashes(fmt)
 
 	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchone()
@@ -981,37 +1014,6 @@ def passwd_or_hash(uname):
 	
 	rid, domain, username, password, nt_hash = fetch[0]
 	print password if password != "" else nt_hash
-
-def view(table):
-	rows, columns = os.popen('stty size', 'r').read().split()
-	res = cfg.cursor.execute("PRAGMA TABLE_INFO(%s)" % table) # unsafe but who cares
-	res = res.fetchall()
-	if len(res) == 0:
-		print "[!] Error: No such table."
-		clean_exit(1)
-	n_cols = len(res)
-	w_cols = (int(columns) / n_cols) - 4
-	l = ''
-	for c in res:
-		l += "%-{w}s | ".format(w=w_cols+1) % c[1]
-	print l[:-3]
-	print '-'*int(columns)
-	res = cfg.cursor.execute("SELECT * FROM `%s`" % table) # unsafe but who cares
-	res = res.fetchall()
-	try:
-		for row in res:
-			l = ''
-			for col in row:
-				
-				if isinstance(col, unicode):
-					col = col.encode('utf-8')
-				else:
-					col = str(col)
-
-				l += "%-{w}s | ".format(w=w_cols+1) % col[:w_cols+1]
-			print l[:-3]
-	except:
-		clean_exit(1)
 
 def run(cmd):
 	if cfg.verbose:
