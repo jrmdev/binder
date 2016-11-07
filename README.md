@@ -34,9 +34,7 @@ Otherwise only standard python libs.
 ```
   -h, --help            show this help message and exit
   -s <project_name>, --start <project_name>
-                        Start a new project under the projects directory
-  -r <project_name>, --resume <project_name>
-                        Continue to work on a previously started project
+                        Start a new project or resume an existing project
   -y, --screenshot      Take a screenshot and save it in the project folder
   -d <domain_name>, --domain <domain_name>
                         Limit all actions to this domain. (i.e. when querying
@@ -63,7 +61,6 @@ Otherwise only standard python libs.
                         Display all the information about a user.
   -o, --report          Generate a report
   -v, --verbose         Enable debug messages
-
 
 ```
 

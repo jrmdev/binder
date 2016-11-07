@@ -8,6 +8,7 @@ import shlex
 import re
 import hashlib
 import argparse
+import itertools
 import ConfigParser
 from random import choice
 
@@ -30,15 +31,7 @@ def main():
 		action='store',
 		metavar='<project_name>',
 		dest='start',
-		help='Start a new project under the projects directory',
-		default=False)
-
-	exclusive.add_argument(
-		'-r', '--resume',
-		action='store',
-		metavar='<project_name>',
-		dest='resume',
-		help='Continue to work on a previously started project',
+		help='Start a new project or resume an existing project',
 		default=False)
 
 	exclusive.add_argument(
@@ -161,10 +154,10 @@ def main():
 	cfg.domain_list = []
 	cfg.domain_scope = cfg.domain_list
 
-	if not cfg.start and not cfg.resume:
+	if not cfg.start:
 
 		if cfg.current_project == '':
-			print "[!] No project started. Start or resume a project with '%s start|resume <project_name>'." % (sys.argv[0])
+			print "[!] No project started. Start or resume a project with '%s start <project_name>'." % (sys.argv[0])
 			sys.exit(1)
 		
 		load_config()
@@ -177,9 +170,6 @@ def main():
 
 	if cfg.start:
 		start_project(cfg.start)
-
-	elif cfg.resume:
-		resume_project(cfg.resume)
 
 	elif cfg.screenshot:
 		screenshot()
@@ -233,11 +223,12 @@ def report():
 	try:
 		import pygal, lxml, cssselect, tinycss
 		from collections import OrderedDict
+
 		gen_charts = True
-	except:
+
+	except ImportError:
 		print "[+] Note: To enable chart generation, the following python modules are necessary: pygal, lxml, cssselect, tinycss"
 		gen_charts = False
-		pass
 
 	for d in cfg.domain_scope:
 
@@ -272,13 +263,13 @@ def report():
 			if nb_cracked[0]<10:
 				continue
 
-			chart_style = pygal.style.DefaultStyle(legend_font_size=11, value_font_size=9, background='#FFF')
+			chart_style = pygal.style.LightColorizedStyle(legend_font_size=11, value_font_size=9, background='#FFF')
 
 			# chart - most used pwds
-			chart_1 = pygal.HorizontalBar(width=500, height=60+20*len([(x[0], x[1]) for x in most_used if x[0] >= 10]), legend_box_size=10, style=chart_style)
+			chart_1 = pygal.HorizontalBar(width=500, height=250, legend_box_size=10, style=chart_style)
 			chart_1.title = '%s - Most used passwords' % dom_name
 
-			for row in [(x[0], x[1]) for x in most_used if x[0] >= 10]:
+			for row in [(x[0], x[1]) for x in most_used if x[0] > 1]:
 				chart_1.add(row[1], row[0])
 			
 			chart_1.render_to_png(os.path.join(cfg.binder_dir, '%s.mostused.png' % dom_name))
@@ -290,11 +281,11 @@ def report():
 									"FROM `domain_accounts` WHERE `domain`=? and LENGTH(`nt_hash`)>0 "
 									"GROUP BY type, is_cracked", (dom_name,)).fetchall()
 
-			chart_2 = pygal.Pie(width=300, height=300, legend_at_bottom=True, print_values=True, legend_at_bottom_columns=2, 
+			chart_2 = pygal.Pie(width=275, height=200, legend_at_bottom=True, print_values=True, legend_at_bottom_columns=2, 
 				value_formatter=lambda x: '%d (%d%%)' % (x, x*100/nb_accounts[0] if nb_accounts[0]>0 else 1),
 				 inner_radius=.4, style=chart_style)
 
-			chart_2.title = '%s - Cracked passwords per algorithm' % dom_name
+			chart_2.title = '%s - Cracked passwords' % dom_name
 
 			for row in res:
 				chart_2.add('%s - %s' % (row[0], row[1]), row[2])
@@ -307,22 +298,22 @@ def report():
 									"WHERE `domain`=? AND nb_chars>0 AND LENGTH(`nt_hash`)>0 "
 									"GROUP BY nb_chars ORDER BY nb_chars ASC", (dom_name,)).fetchall()
 
-			lengths_dict = OrderedDict({6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0})
+			lengths = OrderedDict({6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0})
 
 			for row in res:
 
-				if   row[0] <= 6:  lengths_dict[6]      += row[1]
-				elif row[0] >= 12: lengths_dict[12]     += row[1]
-				else:              lengths_dict[row[0]] += row[1]
+				if   row[0] <= 6:  lengths[6]      += row[1]
+				elif row[0] >= 12: lengths[12]     += row[1]
+				else:              lengths[row[0]] += row[1]
 
-			chart_3 = pygal.Bar(width=600, height=300, style=chart_style)
+			chart_3 = pygal.Bar(width=500, height=250, style=chart_style)
 			chart_3.title = '%s - Password Lengths' % dom_name
 
-			for l in lengths_dict:
+			for l in lengths:
 				if   l == 6:  s = '6 chars or less'
 				elif l == 12: s = '12 chars or more'
 				else: s = str(l) + ' chars'
-				chart_3.add(s, lengths_dict[l])
+				chart_3.add(s, lengths[l])
 
 			chart_3.render_to_png(os.path.join(cfg.binder_dir, '%s.lengths.png' % dom_name))
 
@@ -451,9 +442,11 @@ def crack_hashes(levels=[1, 2]):
 				h = hashlib.new('md4', str.encode('utf-16le')).digest()
 				return h.encode('hex').lower()
 
-			while ntlm_hash(passwd) != nt_hash.lower():
-				passwd = ''.join(choice(x) for x in zip(passwd.lower(), passwd.upper()))
-			return passwd
+			nt_hash = nt_hash.lower()
+
+			for p in itertools.product(*((c.upper(), c.lower()) for c in passwd)):
+				if ntlm_hash(''.join(p)) == nt_hash:
+					return p
 
 		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, cfg.pot_file, cfg.hash_file)
 	
@@ -751,7 +744,7 @@ def update_hashes(file):
 		while len(tab) > 8:
 			tab[1] += ':'+tab[2]; del tab[2]
 
-		if len(tab[1]) > 0:
+		if len(tab[1]) > 0 and '???????' not in tab[1]:
 			cleartexts[tab[4]] = tab[1]
 
 	users_ins = []
@@ -788,6 +781,8 @@ def update_hashes(file):
 
 		if (rid, dom_short) in existing_users:
 			users_upd.append((uname, password, lm_hash, nt_hash, 0, existing_users[(rid, dom_short)]))
+			if uname =='SOUDX003':
+				print (uname, password, lm_hash, nt_hash, 0, existing_users[(rid, dom_short)])
 		else:
 			users_ins.append((rid, dom_short, uname, password, lm_hash, nt_hash, 0))
 
@@ -805,7 +800,6 @@ def update_hashes(file):
 		print "[+] %d unique cleartexts." % len(cleartexts)
 
 	cfg.cursor.commit()
-
 	print "[+] Done."
 
 def flush():
@@ -907,9 +901,14 @@ def get_user(username):
 def screenshot():
 
 	filename = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S") + '.png'
-	full_path = os.path.join(cfg.shots_dir, filename)
 
-	os.popen('scrot "%s" -s -e \'xclip -selection clipboard -t image/png "%s"\'' % (full_path, full_path))
+	if os.path.exists(cfg.shots_dir):
+		full_path = os.path.join(cfg.shots_dir, filename)
+	else:
+		full_path = os.path.join('/tmp', '.binder.png')
+
+	os.popen('scrot -s "%s"' % full_path)
+	os.popen('xclip -selection clipboard -t image/png "%s"' % full_path)
 
 def load_config():
 
@@ -936,58 +935,53 @@ def load_config():
 	for row in res:
 		cfg.domain_list.append((row[0], row[1]))
 
-def init_db(name):
+def start_project(name):
+
+	project_dir = os.path.join(cfg.project_dir, name)
+
+	if os.path.exists(project_dir):
+		print "[+] Resuming project %s..." % name
+
+	else:
+		print "[+] Starting project %s..." % name
+		os.mkdir(project_dir)
+	
+		try:
+			print "[+] Creating configuration files..."
+			os.mkdir(os.path.join(project_dir, '.'+cfg.prog_name))
+			os.mkdir(os.path.join(project_dir, 'screenshots'))
+			os.mkdir(os.path.join(project_dir, 'axfr'))
+			os.mkdir(os.path.join(project_dir, 'enum'))
+			os.mkdir(os.path.join(project_dir, 'scans'))
+		except:
+			pass
+
+	# Update config file
+	import fileinput
+
+	for line in fileinput.input(cfg.config_file, inplace=True):
+		if line.startswith('CURRENT_PROJECT ='):
+			print 'CURRENT_PROJECT = %s' % name
+		else:
+			print line,
+
+	if not os.path.exists(os.path.join(project_dir, '.'+cfg.prog_name)):
+		os.mkdir(os.path.join(project_dir, '.'+cfg.prog_name))
+
+	cfg.database = os.path.join(project_dir, '.'+cfg.prog_name, cfg.db_filename)
 
 	if not os.path.exists(cfg.database):
+
+		print "[+] Creating database..."
 		cfg.cursor = sqlite3.connect(cfg.database)
 		cfg.cursor.execute('CREATE TABLE domain_accounts (id INTEGER PRIMARY KEY, rid, domain varchar(32), username varchar(32), password varchar(32), lm_hash varchar(32), nt_hash varchar(32), name varchar(32), descr varchar(32), active INTEGER)')
-		#cfg.cursor.execute('CREATE TABLE local_creds (rid, dumped_from varchar(32), username varchar(32), password varchar(32), lm_hash varchar(32), nt_hash varchar(32), active INTEGER)')
 		cfg.cursor.execute('CREATE TABLE domain_controllers (id INTEGER PRIMARY KEY, domain varchar(32), hostname varchar(32), ipaddr varchar(32), allow_axfr INTEGER, allow_anon_enum INTEGER)')
 		cfg.cursor.execute('CREATE TABLE domain_groups (id INTEGER PRIMARY KEY, rid INTEGER, domain varchar(32), `group` varchar(32), username varchar(32))')
 		cfg.cursor.execute('CREATE TABLE domains (id INTEGER PRIMARY KEY, domain varchar(32), fqdn varchar(64))')
 		cfg.cursor.commit()
 		cfg.cursor.close()
 
-def start_project(name):
-
-	print "[+] Starting project %s..." % name
-	print "[+] Creating configuration files..."
-	project_dir = os.path.join(cfg.project_dir, name)
-
-	if not os.path.exists(project_dir):
-		os.mkdir(project_dir)
-	
-	try:
-		os.mkdir(os.path.join(project_dir, '.'+cfg.prog_name))
-		os.mkdir(os.path.join(project_dir, 'screenshots'))
-		os.mkdir(os.path.join(project_dir, 'axfr'))
-		os.mkdir(os.path.join(project_dir, 'enum'))
-		os.mkdir(os.path.join(project_dir, 'scans'))
-	except:
-		pass
-
-	print "[+] Creating database..."
-	cfg.database = os.path.join(project_dir, '.'+cfg.prog_name, cfg.db_filename)
-	init_db(name)
-
 	print "[+] Done."
-
-def resume_project(name):
-	
-	if os.path.exists(cfg.config_file):
-
-		if os.path.exists(os.path.join(cfg.project_dir, name)):
-
-			cfg.binder_dir = os.path.join(cfg.project_dir, name, '.'+cfg.prog_name)
-			cfg.database = os.path.join(cfg.binder_dir, cfg.db_filename)
-			init_db(name)
-
-			print "[+] Active project is %s" % name
-		else:
-			print "[!] Error: project %s was never started." % name
-
-	else:
-		print "[!] Error: configuration file not found. Start a project first."
 
 def passwd_or_hash(uname):
 
