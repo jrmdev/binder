@@ -3,14 +3,20 @@ import sys
 import os
 import subprocess
 import socket
-import datetime
 import shlex
 import re
 import hashlib
 import argparse
-import itertools
 import ConfigParser
+
+from threading import Thread
+from time import sleep
+from datetime import datetime
+from itertools import product
+from operator import itemgetter
+from multiprocessing import cpu_count
 from random import choice
+from signal import SIGINT
 
 try:
 	import sqlite3
@@ -71,7 +77,7 @@ def main():
 		metavar='<levels>',
 		type=int,
 		nargs='*',
-		help='Run multiple password cracking attacks. Pass a space-separated list of levels. Levels: 1: Local db, 2: single, 3: dictionaries/rules, 4: masks, 5: markov, 6: brute-force. Default: 1 2',
+		help='Run multiple password cracking attacks. Pass a space-separated list of levels. Levels: 1: Local db, 2: single, 3: dictionaries/rules, 4: markov, 5: masks, 6: brute-force. Default: 1 2',
 		default=False)
 
 	exclusive.add_argument(
@@ -153,6 +159,7 @@ def main():
 	cfg.cursor      = None
 	cfg.domain_list = []
 	cfg.domain_scope = cfg.domain_list
+	cfg.job_running = False
 
 	if not cfg.start:
 
@@ -207,6 +214,8 @@ def clean_exit(retcode=0):
 
 	if cfg.cursor is not None:
 		cfg.cursor.close()
+
+	cfg.job_running = False
 
 	sys.exit(0)
 
@@ -317,8 +326,6 @@ def report():
 
 			chart_3.render_to_png(os.path.join(cfg.binder_dir, '%s.lengths.png' % dom_name))
 
-
-
 def set_domain(domain):
 	for d in cfg.domain_list:
 		if d[0] == domain.upper() or d[1] == domain.upper():
@@ -360,7 +367,6 @@ def crack_hashes(levels=[1, 2]):
 	cfg.hash_file = os.path.join(cfg.binder_dir, 'hashes.bndr')
 	cfg.mkv_file  = os.path.join(cfg.binder_dir, 'mkv_stats.bndr')
 
-
 	# start functions
 	def recursive_file_listing(path, exts):
 		ret = []
@@ -373,11 +379,60 @@ def crack_hashes(levels=[1, 2]):
 		return ret
 
 	def filter_lm_masks(masks):
-		# For LM, skip the lowercase stuff and
-		# keep only masks with len <= 7
-		ret = [x.replace('?2', '?1').replace('?5', '?1') for x in masks if (len(x) <= 14)]
+		'''Modify a list of masks for use with the LM format'''
+
+		ret = []
+		for m in [x.replace('?2', '?1').replace('?5', '?1') for x in masks]:
+			if len(m) > 14:
+				ret.append(m[:14])
+				ret.append(m[14:])
+			else:
+				ret.append(m)
+
 		seen = set()
 		return [x for x in ret if not (x in seen or seen.add(x))]
+
+	def get_masks_from_dict():
+
+		lines = open(cfg.dict_file).readlines()
+
+		charsets = {
+			1: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+			2: 'abcdefghijklmnopqrstuvwxyz',
+			3: '0123456789',
+			4: '!@#$./_',
+			5: '',
+		}
+
+		masks = {}
+
+		for word in lines:
+			word = word.strip()
+
+			m = ''
+			for c in word:
+				if c in charsets[1]:
+					m += '?1'
+				elif c in charsets[2]:
+					m += '?2'
+				elif c in charsets[3]:
+					m += '?3'
+				elif c in charsets[4]:
+					m += '?4'
+				else:
+					if c not in charsets[5]:
+						charsets[5] += c
+					m += '?5'
+
+			if m not in masks:
+				masks[m] = 1
+			else:
+				masks[m] += 1
+
+		sorted_masks = sorted(masks.items(), key=itemgetter(1), reverse=True)
+
+		# Take only the top 10 masks
+		return [m[0] for m in sorted_masks[:10]]
 
 	def pc(mode, i, tot):
 		pc = i*100 / tot
@@ -434,32 +489,40 @@ def crack_hashes(levels=[1, 2]):
 
 		open(cfg.dict_file, 'wb').write('\n'.join(set(words)))
 
+	def monitor_crack_job(fmt='nt', mode='bf', delay=2):
+		sleep(.3)
+		
+		cpt = 0
+		while cfg.job_running:
+			try:
+				pc('%s %s' % (mode, fmt), cpt, cfg.jtr_tmout*60)
+				sleep(delay)
+				cpt += delay
+				get_cracked_hashes(fmt)
+			except:
+				print "\nExiting..."
+				clean_exit(1)
+
 	def get_cracked_hashes(fmt='nt'):
 
 		def find_good_case(passwd, nt_hash):
 		
-			def ntlm_hash(str):
-				h = hashlib.new('md4', str.encode('utf-16le')).digest()
-				return h.encode('hex').lower()
-
 			nt_hash = nt_hash.lower()
 
-			for p in itertools.product(*((c.upper(), c.lower()) for c in passwd)):
-				if ntlm_hash(''.join(p)) == nt_hash:
+			for p in product(*((c.upper(), c.lower()) for c in passwd)):
+
+				p = ''.join(p)
+				h = hashlib.new('md4', p.encode('utf-16le')).digest()
+
+				if nt_hash == h.encode('hex').lower():
 					return p
+
+			return False
 
 		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, cfg.pot_file, cfg.hash_file)
 	
-		try:
-			ret = os.popen(command).readlines()
-	
-		except KeyboardInterrupt:
-			print "\n[*] Exiting..."
-			clean_exit(0)
-
 		found = []
-
-		for output in ret:
+		for output in os.popen(command).readlines():
 			
 			if ':::' not in output:
 				continue
@@ -525,7 +588,7 @@ def crack_hashes(levels=[1, 2]):
 	if 3 in levels:
 
 		cpt = 0
-		dict_list = get_dict_list()	
+		dict_list = get_dict_list()
 		print "\r[+] Running dictionary attack with %d wordlists..." % len(dict_list)
 
 		for d in dict_list:
@@ -536,26 +599,6 @@ def crack_hashes(levels=[1, 2]):
 
 	if 4 in levels:
 
-		cpt = 0
-
-		for fmt in ['lm', 'nt']:
-
-			masks = ['?1?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3?3','?1?2?2?2?3?3?3?3','?1?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3','?1?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?3','?1?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?2?3','?1?3?3?3?3?3?3?3?4','?1?2?2?2?2?2?2?3?3?3','?1?2?3?3?3?3?3?3','?1?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?2?3?3','?3?3?3?3?3?4?1?3?2','?1?2?2?2?2?2?3','?2?1?3?3?3?3?3?3','?1?4?2?2?3?3?3?3?3']
-			
-			if fmt == 'lm':
-				masks = filter_lm_masks(masks)
-
-			print "\r[+] Running mask attack on %s with %d masks..." % (fmt, len(masks))
-		
-			for m in masks:
-				
-				pc('masks', cpt, len(masks))
-				run(cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.pot_file, (cfg.jtr_tmout*60)/len(masks), m, len(m)/2, cfg.hash_file))
-				nb_cracked = get_cracked_hashes(fmt)
-				cpt += 1
-
-	if 5 in levels:
-
 		print "\r[+] Running markov attack..."
 		update_dict_file()
 
@@ -564,21 +607,44 @@ def crack_hashes(levels=[1, 2]):
 		run(cfg.jtr_path +" --format=nt --pot=%s --nolog --markov=200 --max-run-time=%d --max-len=13 --mkv-stats=%s %s" % (cfg.pot_file, cfg.jtr_tmout*60, cfg.mkv_file, cfg.hash_file))
 		nb_cracked = get_cracked_hashes()
 
-	if 6 in levels:
+	if 5 in levels:
 
-		from multiprocessing import cpu_count
+		update_dict_file()
+		masks_from_dict = get_masks_from_dict()
+
+		for fmt in ['lm', 'nt']:
+			# masks = ['?1?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3?3','?1?2?2?2?3?3?3?3','?1?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3','?1?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?3','?1?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?2?3','?1?3?3?3?3?3?3?3?4','?1?2?2?2?2?2?2?3?3?3','?1?2?3?3?3?3?3?3','?1?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?2?3?3','?3?3?3?3?3?4?1?3?2','?1?2?2?2?2?2?3','?2?1?3?3?3?3?3?3','?1?4?2?2?3?3?3?3?3']
+			
+			masks = filter_lm_masks(masks_from_dict) if fmt == 'lm' else masks_from_dict
+			print "\r[+] Running mask attack on %s with %d masks..." % (fmt, len(masks))
+			
+			for m in masks:
+
+				cmd = cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.pot_file, cfg.jtr_tmout*60, m, len(m)/2, cfg.hash_file)
+				thread = Thread(target=run, args=(cmd,))
+				thread.start()
+
+				monitor_crack_job(fmt, 'mask %s' % m, 10)
+
+	if 6 in levels:
 
 		for fmt in ['lm', 'nt']:
 
 			print "\r[+] Running brute-force attack on %s for %d minutes..." % (fmt, cfg.jtr_tmout)
-
 			if not os.path.exists('%s.%s.bf.rec' % (cfg.sess_file, fmt)):
-				run(cfg.jtr_path +" --format=%s --session=%s.%s.bf --pot=%s --nolog --incremental=%s --max-len=%d --max-run-time=%d --fork=%d %s" % 
-					(fmt, cfg.sess_file, fmt, cfg.pot_file, 'lm_ascii' if fmt == 'lm' else 'ascii', 7 if fmt == 'lm' else 12, cfg.jtr_tmout*60, cpu_count(), cfg.hash_file))
-			else:
-				run(cfg.jtr_path +" --restore=%s.%s.bf" % (cfg.sess_file, fmt))
+	
+				charset = 'lm_ascii' if fmt == 'lm' else 'ascii'
+				max_length = 7 if fmt == 'lm' else 12
+				cmd = cfg.jtr_path +" --format=%s --session=%s.%s.bf --pot=%s --nolog --incremental=%s --max-len=%d --max-run-time=%d --fork=%d %s" % (fmt, cfg.sess_file, fmt, cfg.pot_file, charset, max_length, cfg.jtr_tmout*60, cpu_count(), cfg.hash_file)
 			
-			nb_cracked = get_cracked_hashes(fmt)
+			else:
+	
+				cmd = cfg.jtr_path +" --restore=%s.%s.bf" % (cfg.sess_file, fmt)
+			
+			thread = Thread(target=run, args=(cmd,))
+			thread.start()
+
+			monitor_crack_job(fmt, 'bf', 10)
 
 	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchone()
 	print "[+] %d passwords cracked." % cracked[0]
@@ -781,8 +847,6 @@ def update_hashes(file):
 
 		if (rid, dom_short) in existing_users:
 			users_upd.append((uname, password, lm_hash, nt_hash, 0, existing_users[(rid, dom_short)]))
-			if uname =='SOUDX003':
-				print (uname, password, lm_hash, nt_hash, 0, existing_users[(rid, dom_short)])
 		else:
 			users_ins.append((rid, dom_short, uname, password, lm_hash, nt_hash, 0))
 
@@ -900,7 +964,7 @@ def get_user(username):
 
 def screenshot():
 
-	filename = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S") + '.png'
+	filename = datetime.now().strftime("%Y-%m-%d_%H.%M.%S") + '.png'
 
 	if os.path.exists(cfg.shots_dir):
 		full_path = os.path.join(cfg.shots_dir, filename)
@@ -1010,21 +1074,26 @@ def passwd_or_hash(uname):
 	print password if password != "" else nt_hash
 
 def run(cmd):
-	if cfg.verbose:
-		print ""
-		print color("[>] %s" % cmd, 2, 1)
-
 	try:
+		if cfg.verbose:
+			print ""
+			print color("[>] %s" % cmd, 2, 1)
+
+		cfg.job_running = True
 		process = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
 		ret = process.stdout.read()
+
 		if cfg.verbose:
-			print color("[<] %s" % ret.strip(), 2) 
+			print color("[<] %s" % ret.strip(), 2)
+		
+		cfg.job_running = False
+
 		return ret.strip() + "\n"
 
 	except KeyboardInterrupt:
-		from signal import SIGINT
 		print ""
 		os.kill(process.pid, SIGINT)
+		cfg.job_running = False
 		clean_exit(1)
 
 if __name__ == "__main__":
