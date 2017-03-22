@@ -24,7 +24,7 @@ except:
 	print "[!] Please install python-sqlite3 extension."
 	sys.exit(0)
 
-__version__ = 0.4
+__version__ = 1.0
 __prog_name__ = 'binder'
 
 def main():
@@ -112,6 +112,13 @@ def main():
 		help='Display all the information about a user.',
 		default=False)
 
+	exclusive.add_argument('-S', '--search',
+		action='store',
+		dest='search',
+		metavar='<search_term>',
+		help='Search the database.',
+		default=False)
+
 	parser.add_argument('-o', '--report',
 		action='store_true',
 		help='Generate a report',
@@ -157,8 +164,7 @@ def main():
 	cfg.db_filename = '%s.db' % cfg.prog_name
 	cfg.database    = None
 	cfg.cursor      = None
-	cfg.domain_list = []
-	cfg.domain_scope = cfg.domain_list
+	cfg.domain_list = {}
 	cfg.job_running = False
 
 	if not cfg.start:
@@ -208,6 +214,9 @@ def main():
 	elif cfg.getuser:
 		get_user(cfg.getuser)
 
+	elif cfg.search:
+		search_db(cfg.search)
+
 	clean_exit()
 
 def clean_exit(retcode=0):
@@ -222,8 +231,11 @@ def clean_exit(retcode=0):
 def color(txt, code = 1, modifier = 0):
 	return "\033[%d;3%dm%s\033[0m" % (modifier, code, txt)
 
-def use_creds(name):
-	pass
+def domain_id_from_name(name):
+	for k, v in cfg.domain_list.iteritems():
+		if v[0].upper() == name:
+			return k
+	return False
 
 def report():
 	chart_data = {}
@@ -239,18 +251,18 @@ def report():
 		print "[+] Note: To enable chart generation, the following python modules are necessary: pygal, lxml, cssselect, tinycss"
 		gen_charts = False
 
-	for d in cfg.domain_scope:
+	for dom_id in cfg.domain_scope:
 
-		dom_name, dom_fqdn = d
+		dom_name, dom_fqdn = cfg.domain_list[dom_id]
 
-		nb_accounts = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(nt_hash)>0", (dom_name,)).fetchone()
-		nb_cracked  = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LENGTH(password)>0", (dom_name,)).fetchone()
-		nb_da       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Domain Admins'", (dom_name,)).fetchone()
-		nb_ea       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_groups WHERE domain=? AND `group`='Enterprise Admins'", (dom_name,)).fetchone()
-		nb_lm       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND `lm_hash` NOT IN ('aad3b435b51404eeaad3b435b51404ee','00000000000000000000000000000000','')", (dom_name,)).fetchone()
-		nb_lep      = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password)=LOWER(username)", (dom_name,)).fetchone()
-		nb_weak     = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM domain_accounts WHERE domain=? AND LOWER(password) IN('"+ "', '".join(weak_passwords)  +"')", (dom_name,)).fetchone()
-		most_used   = cfg.cursor.execute("SELECT COUNT(id) AS nb, password FROM domain_accounts WHERE password != '' AND password NOT LIKE '%???????%' AND domain=? GROUP BY password ORDER BY nb DESC LIMIT 10", (dom_name,)).fetchall()
+		nb_accounts = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM domain_accounts WHERE domain_id = ? AND LENGTH(nt_hash)>0", (dom_id,)).fetchone()
+		nb_cracked  = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM domain_accounts WHERE domain_id = ? AND LENGTH(password)>0", (dom_id,)).fetchone()
+		nb_da       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM group_members WHERE domain_id = ? AND `group_id` = 512", (dom_id,)).fetchone()
+		nb_ea       = cfg.cursor.execute("SELECT COUNT(id) AS nb FROM group_members WHERE domain_id = ? AND `group_id` = 519", (dom_id,)).fetchone()
+		nb_lm       = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM domain_accounts WHERE domain_id = ? AND `lm_hash` NOT IN ('aad3b435b51404eeaad3b435b51404ee','00000000000000000000000000000000','')", (dom_id,)).fetchone()
+		nb_lep      = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM domain_accounts WHERE domain_id = ? AND LOWER(password)=LOWER(username)", (dom_id,)).fetchone()
+		nb_weak     = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM domain_accounts WHERE domain_id = ? AND LOWER(password) IN('"+ "', '".join(weak_passwords)  +"')", (dom_id,)).fetchone()
+		most_used   = cfg.cursor.execute("SELECT COUNT(rid) AS nb, password FROM domain_accounts WHERE password != '' AND password NOT LIKE '%???????%' AND domain_id = ? GROUP BY password ORDER BY nb DESC LIMIT 10", (dom_id,)).fetchall()
 
 		print "- Report for domain %s (%s):" % (color(dom_name), dom_fqdn)
 		print "    %s accounts in total." % color(nb_accounts[0])
@@ -287,8 +299,8 @@ def report():
 			# chart - lm/nt cracked/uncracked
 			res = cfg.cursor.execute("SELECT CASE WHEN `lm_hash`='aad3b435b51404eeaad3b435b51404ee' THEN 'NT' ELSE 'LM' END AS type, "
 									"CASE WHEN `password`='' THEN 'Uncracked' ELSE 'Cracked' END AS is_cracked, COUNT(`password`) AS result "
-									"FROM `domain_accounts` WHERE `domain`=? and LENGTH(`nt_hash`)>0 "
-									"GROUP BY type, is_cracked", (dom_name,)).fetchall()
+									"FROM `domain_accounts` WHERE `domain_id`=? and LENGTH(`nt_hash`)>0 "
+									"GROUP BY type, is_cracked", (dom_id,)).fetchall()
 
 			chart_2 = pygal.Pie(width=275, height=200, legend_at_bottom=True, print_values=True, legend_at_bottom_columns=2, 
 				value_formatter=lambda x: '%d (%d%%)' % (x, x*100/nb_accounts[0] if nb_accounts[0]>0 else 1),
@@ -302,10 +314,10 @@ def report():
 			chart_2.render_to_png(os.path.join(cfg.binder_dir, '%s.cracked.png' % dom_name))
 
 			# chart - password lenghts
-			res = cfg.cursor.execute("SELECT LENGTH(`password`) AS nb_chars, COUNT(id) AS sum "
+			res = cfg.cursor.execute("SELECT LENGTH(`password`) AS nb_chars, COUNT(rid) AS sum "
 									"FROM `domain_accounts` "
-									"WHERE `domain`=? AND nb_chars>0 AND LENGTH(`nt_hash`)>0 "
-									"GROUP BY nb_chars ORDER BY nb_chars ASC", (dom_name,)).fetchall()
+									"WHERE `domain_id`=? AND nb_chars>0 AND LENGTH(`nt_hash`)>0 "
+									"GROUP BY nb_chars ORDER BY nb_chars ASC", (dom_id,)).fetchall()
 
 			lengths = OrderedDict({6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 0, 12: 0})
 
@@ -327,9 +339,11 @@ def report():
 			chart_3.render_to_png(os.path.join(cfg.binder_dir, '%s.lengths.png' % dom_name))
 
 def set_domain(domain):
-	for d in cfg.domain_list:
+	cfg.domain_scope = []
+
+	for dom_id, d in cfg.domain_list.iteritems():
 		if d[0] == domain.upper() or d[1] == domain.upper():
-			cfg.domain_scope = [(d[0], d[1])]
+			cfg.domain_scope.append(dom_id)
 			return
 
 	print "[!] No such domain in database."
@@ -337,27 +351,65 @@ def set_domain(domain):
 
 def show_passwords():
 
-	if cfg.domain_scope == cfg.domain_list:
-		req = cfg.cursor.execute("SELECT `domain`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%'")
+	if cfg.domain_scope == cfg.domain_list.keys() or cfg.domain_scope == []:
+		req = cfg.cursor.execute("SELECT `domain_id`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%'")
 	else:
-		req = cfg.cursor.execute("SELECT `domain`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%' AND `domain` IN (?)", [d[0] for d in cfg.domain_scope])
+		req = cfg.cursor.execute("SELECT `domain_id`, `username`, `password` FROM `domain_accounts` WHERE `password` != '' AND `password` NOT LIKE '%???????%' AND `domain_id` IN (?)", (cfg.domain_scope,))
 
 	cpt = 0
 	for row in req.fetchall():
-		dom, usr, psw = row
-		if dom != '':
-			usr = dom +'\\'+ usr
-		try:
-			print usr +':'+ psw
-		except IOError:
-			clean_exit(1)
-
+		dom_id, usr, psw = row
+		usr = '%s\\%s' % (cfg.domain_list[dom_id][0], usr)
+		print usr +':'+ psw
 		cpt += 1
 
 	print "[+] %d passwords cracked." % cpt
 
-def color(txt, code = 1, modifier = 0):
-	return "\033[%d;3%dm%s\033[0m" % (modifier, code, txt)
+def search_db(keyword):
+
+	def formatted_table(headers, data):
+		columns = []
+		tavnit = '|'
+		separator = '+'
+	
+		columns = map(lambda x: x[0], headers)
+		sizetable = [map(len, row) for row in [tuple(columns)]+data]
+
+		for w in map(max, zip(*sizetable)):
+			tavnit += " %-"+"%ss |" % (w,)
+			separator += '-'*w + '--+'
+
+		ret = separator + '\n' + tavnit % tuple(columns) + '\n' + separator + '\n'
+		ret += '\n'.join(tavnit % row for row in data) 
+		ret += '\n' + separator
+		return ret
+
+	keyword = '%'+keyword+'%'
+	res_users = cfg.cursor.execute("""
+		SELECT d.domain, a.username, a.password, a.name AS fullname, a.descr AS description
+		FROM domain_accounts a
+		LEFT JOIN domains d ON (d.id = a.domain_id)
+		WHERE a.name LIKE ? OR a.username LIKE ? OR a.descr LIKE ?
+		ORDER BY a.username
+	""", (keyword, keyword, keyword))
+
+	res_groups = cfg.cursor.execute("""
+		SELECT d.domain, g.name AS `group` FROM domain_groups g
+		LEFT JOIN domains d ON (d.id = g.domain_id)
+		WHERE g.name LIKE ?
+		ORDER BY g.name
+	""", (keyword,))
+
+	headers_users = res_users.description
+	headers_groups = res_groups.description
+	data_users = res_users.fetchall()
+	data_groups = res_groups.fetchall()
+
+	if len(data_users) > 0:
+		print formatted_table(headers_users, data_users)
+
+	if len(data_groups) > 0:
+		print formatted_table(headers_groups, data_groups)
 
 def crack_hashes(levels=[1, 2]):
 
@@ -649,82 +701,108 @@ def crack_hashes(levels=[1, 2]):
 	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchone()
 	print "[+] %d passwords cracked." % cracked[0]
 
-def user_list():
+def sanitize(s):
+	s = s.strip()
+	s = s.decode('latin1', 'ignore')
+	s = s.encode('utf8', 'ignore')
+	return s
+
+def parse_enum(file):
 
 	users = {}
-	res = cfg.cursor.execute("SELECT id, rid, domain FROM domain_accounts").fetchall()
-	for row in res:
-		id, rid, dom = row
-		users[(rid, dom)] = id
+	groups = {}
+	members = []
 
-	return users
+	user_to_rid = {}
+	group_to_rid = {}
 
-def update_accounts(file):
+	regex_accounts = re.compile(u"index: (.+) RID: (.+) acb: (.+) Account: (.+)\tName: (.+)\tDesc: (.+)$")
+	regex_members = re.compile(u"Group '(.+)' \(RID: ([0-9]+)\) has member: (.+)$")
+	regex_groups = re.compile(u"group:\[(.+)\] rid:\[(.+)\]$")
 
-	existing_users = user_list()
-	users_ins = []
-	users_upd = []
-	groups = []
-	dom_short = ''
+	lines = file.readlines()
+	lines = map(sanitize, lines)
 
-	regex_acct = re.compile(u"index: (.+) RID: (.+) acb: (.+) Account: (.+)\tName: (.+)\tDesc: (.+)$")
-	regex_grp = re.compile(u"Group '(.+)' \(RID: ([0-9]+)\) has member: ([^$]+)")
-
-	print "[+] Reading groups..."
-	for l in file.readlines():
-		l = l.strip()
-		l = l.decode('latin1', 'ignore').encode('utf8', 'ignore')
+	for l in lines:
 
 		if l.startswith('Domain Name: '):
 			domain = l.split(' ', 3)
-			dom_short, dom_long = handle_domains(domain[2])
+			dom_short, dom_long, dom_id = handle_domains(domain[2])
+
+	for l in lines:
 
 		if 'Account:' in l and 'Name:' in l:
-			res = regex_acct.search(l)
+			res = regex_accounts.search(l)
+			_, rid, _, usr, name, desc = res.groups()
 
-			try:
-				_, rid, _, usr, name, desc = res.groups()
+			if usr.startswith(('IUSR_', 'IWAM_', 'SUPPORT_')):
+				continue
 
-				if usr.startswith(('IUSR_', 'IWAM_', 'SUPPORT_')):
-					continue
+			rid = int(rid, 16)
 
-				rid = int(rid, 16)
+			if not len(dom_short):
+				dom_short, dom_long, dom_id = handle_domains(dom_short)
 
-				if not len(dom_short):
-					dom_short, dom_long = handle_domains(dom_short)
+			users[rid] = (rid, dom_id, usr, name, desc)
+			user_to_rid[usr] = rid
 
-				if (rid, dom_short) in existing_users:
-					users_upd.append((name, desc, existing_users[(rid, dom_short)]))
-				else:
-					users_ins.append((rid, dom_short, usr, name, '', '', '', desc))
-			except:
-				pass
+	for l in lines:
+
+		if l.startswith('group:'):
+			res = regex_groups.search(l)
+			grp, rid = res.groups()
+			rid = int(rid, 16)
+			groups[rid] = (rid, dom_id, grp)
+			group_to_rid[grp] = rid
+
+	for l in lines:
 
 		if 'has member:' in l:
-			res = regex_grp.search(l)
+			res = regex_members.search(l)
+			grp, rid, obj = res.groups()
+			grp = grp.replace("'\\''", "'")
+			rid = int(rid)
+			dom, obj = obj.split('\\')
+			dom = dom.upper()
+			
+			if dom == 'NT AUTHORITY':
+				continue
 
-			try:
-				grp, rid, usr = res.groups()
-				grp = grp.replace("'\\''", "'")
-				rid = int(rid)
-				dom, usr = usr.split('\\')
-				groups.append((rid, dom.upper(), grp, usr))
-			except:
+			if dom != dom_short:
+				dom_short, dom_long, dom_id = handle_domains(dom_short)
+
+			if user_to_rid.has_key(obj):
+				account_id = user_to_rid[obj]
+				is_group = False
+
+			elif group_to_rid.has_key(obj):
+				account_id = group_to_rid[obj]
+				is_group = True
+
+			elif obj.endswith('$'):
+				# this is a mchine account
+				# TODO: handle this
 				pass
 
+			members.append((account_id, dom_id, rid, is_group))
+
+	return users, groups, members
+
+def update_accounts(file):
+
+	print "[+] Reading file..."
+	users, groups, members = parse_enum(file)
+	
 	print "[+] Updating database..."
 
-	if len(users_upd):
-		res_u = cfg.cursor.executemany('UPDATE domain_accounts SET name=?, descr=? WHERE id=?', users_upd)
-		print "[+] %d user accounts updated." % res_u.rowcount
+	res_u = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, name, descr) VALUES (?, ?, ?, ?, ?)", users.values())
+	print "[+] %d user accounts updated." % res_u.rowcount
 
-	if len(users_ins):
-		res_i = cfg.cursor.executemany('INSERT INTO domain_accounts (rid, domain, username, name, password, lm_hash, nt_hash, descr, active) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0)', users_ins)
-		print "[+] %d user accounts inserted." % res_i.rowcount
+	res_g = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_groups (rid, domain_id, name) VALUES(?, ?, ?)", groups.values())
+	print "[+] %d unique groups updated." % res_g.rowcount
 
-	if len(groups):
-		res_g = cfg.cursor.executemany('INSERT INTO domain_groups (rid, domain, `group`, username) VALUES(?, ?, ?, ?)', groups)
-		print "[+] %d group memberships updated." % res_g.rowcount
+	res_m = cfg.cursor.executemany("INSERT OR REPLACE INTO group_members (account_id, domain_id, group_id, is_group) VALUES(?, ?, ?, ?)", members)
+	print "[+] %d group memberships updated." % res_m.rowcount
 
 	cfg.cursor.commit()
 	print "[+] Done."
@@ -736,43 +814,51 @@ def handle_domains(dom_str=''):
 	if dom_str == '':
 		dom_short = raw_input("Short name for the new domain? ").upper()
 		dom_long = raw_input("Domain FQDN for '%s'? " % dom_short).upper()
-		cfg.cursor.execute("INSERT INTO domains(domain, fqdn) VALUES(?, ?)", (dom_short, dom_long))
-
 
 	elif '.' in dom_str:
 
 		dom_long = dom_str
-		for d in cfg.domain_list:
-			if d[1] == dom_str:
-				return d
+		for dom_id, d in cfg.domain_list.iteritems():
+			if dom_str in d[1].split(', '):
+				return d[0], dom_long, dom_id
 
 		dom_short = raw_input("Short name for '%s'? " % dom_str).upper()
-		cfg.cursor.execute("INSERT INTO domains(domain, fqdn) VALUES(?, ?)", (dom_short, dom_long))
 
 	else:
 
 		dom_short = dom_str
-		for d in cfg.domain_list:
+		for dom_id, d in cfg.domain_list.iteritems():
 			if d[0] == dom_str:
-				return d
+				return dom_short, d[1], dom_id
 
 		dom_long = raw_input("Domain FQDN for '%s'? " % dom_str).upper()
-		cfg.cursor.execute("INSERT INTO domains(domain, fqdn) VALUES(?, ?)", (dom_short, dom_long))
+
+
+	domain_exists = cfg.cursor.execute('SELECT id, domain, fqdn FROM domains WHERE domain = ?', (dom_short, )).fetchone()
+	
+	if domain_exists:
+		dom_long = domain_exists[2] +', '+ dom_long
+		cfg.cursor.execute("UPDATE domains SET fqdn = ? WHERE domain = ?", (dom_long, dom_short))
+		insert_id = domain_exists[0]
+	
+	else:
+		res = cfg.cursor.execute("INSERT INTO domains(domain, fqdn) VALUES(?, ?)", (dom_short, dom_long))
+		insert_id = res.lastrowid
 
 	cfg.cursor.commit()	
-	cfg.domain_list.append((dom_short, dom_long))
+	cfg.domain_list[insert_id] = (dom_short, dom_long)
 	
-	return dom_short, dom_long
+	return dom_short, dom_long, insert_id
 
 def update_hashes(file):
 
 	res = -1
-	while res not in range(0, len(cfg.domain_list) + 1):
+	while res not in cfg.domain_list.keys() + [max(cfg.domain_list.keys()) + 1]:
 
-		for k in range(len(cfg.domain_list)):
-			print "[%d] %s" % (k, cfg.domain_list[k][0])
-		print "[%d] New domain" % len(cfg.domain_list)
-		print ""
+		for dom_id, d in cfg.domain_list.iteritems():
+			print "[%d] %s" % (dom_id, d[0])
+		print "[%d] New domain" % (dom_id + 1)
+		print
 
 		try:
 			res = int(raw_input('Which domain is this for? ').strip())
@@ -783,27 +869,29 @@ def update_hashes(file):
 		except:
 			continue
 
-	if res == len(cfg.domain_list):
-		curr_dom, dom_long = handle_domains()
+	if res == dom_id + 1:
+		curr_dom, dom_long, dom_id = handle_domains()
 	else:
 		curr_dom, dom_long = cfg.domain_list[res]
+		dom_id = res
 
-	existing_users = user_list()
+	# Getting users from db
+	users = {}
+	res = cfg.cursor.execute("SELECT rid, domain_id, username, password, lm_hash, nt_hash, name, descr FROM domain_accounts WHERE domain_id = ?", (dom_id,)).fetchall()
+	for row in res:
+		users[row[0]] = row
 
+	# Getting previously cracked passwords from john.pot
 	print "[+] Reading cracked passwords..."
-
 	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
 
 	cleartexts = {}
 	cracked  = run(cfg.jtr_path + ' --format=LM --pot=%s --show %s' % (cfg.pot_file, file.name))
 	cracked += run(cfg.jtr_path + ' --format=NT --pot=%s --show %s' % (cfg.pot_file, file.name))
 
-	for l in cracked.split('\n'):
+	for l in map(sanitize, cracked.split('\n')):
 
 		if ':::' not in l: continue
-		
-		l = l.strip()
-		l = l.decode('latin1', 'ignore').encode('utf8', 'ignore')
 		tab = l.split(':')
 
 		# special case when there is a ':' in the password
@@ -813,15 +901,14 @@ def update_hashes(file):
 		if len(tab[1]) > 0 and '???????' not in tab[1]:
 			cleartexts[tab[4]] = tab[1]
 
-	users_ins = []
-	users_upd = []
+	# Reading pwdump file
+	lines = file.readlines()
+	lines = map(sanitize, lines)
 
-	for l in file.readlines():
+	for l in lines:
 
 		if ':::' not in l or '$' in l: continue
 		
-		l = l.strip()
-		l = l.decode('latin1', 'ignore').encode('utf8', 'ignore')
 		tab = l.split(':')
 		tab[0] = tab[0].replace('(current)', '')
 		tab[0] = tab[0].replace('(current-disabled)', '')
@@ -840,25 +927,17 @@ def update_hashes(file):
 
 		if '\\' in uname:
 			dom_extract, uname = uname.split('\\')
-			dom_short, dom_long = handle_domains(dom_extract)
+			#dom_short, dom_long, dom_id = handle_domains(dom_extract)
 	
+		if rid in users:
+			_, _, username, _, _, _, name, descr = users[rid]
+			users[rid] = (rid, dom_id, username, password, lm_hash, nt_hash, name, descr)
 		else:
-			dom_short = curr_dom
-
-		if (rid, dom_short) in existing_users:
-			users_upd.append((uname, password, lm_hash, nt_hash, 0, existing_users[(rid, dom_short)]))
-		else:
-			users_ins.append((rid, dom_short, uname, password, lm_hash, nt_hash, 0))
+			users[rid] = (rid, dom_id, uname, password, lm_hash, nt_hash, '', '') 
 
 	print "[+] Updating database..."
-
-	if len(users_upd):
-		res_u = cfg.cursor.executemany('UPDATE domain_accounts SET username=?, password=?, lm_hash=?, nt_hash=?, active=? WHERE id=?', users_upd)
-		print "[+] %d user accounts updated." % res_u.rowcount
-	
-	if len(users_ins):
-		res_i = cfg.cursor.executemany('INSERT INTO domain_accounts (rid, domain, username, password, lm_hash, nt_hash, active) VALUES(?, ?, ?, ?, ?, ?, ?)', users_ins)
-		print "[+] %d user accounts inserted." % res_i.rowcount
+	res_u = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, password, lm_hash, nt_hash, name, descr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", users.values())
+	print "[+] %d user accounts updated." % res_u.rowcount
 	
 	if len(cleartexts):
 		print "[+] %d unique cleartexts." % len(cleartexts)
@@ -868,99 +947,147 @@ def update_hashes(file):
 
 def flush():
 	print "[+] Flushing user accounts from database..."
-	cfg.cursor.execute('DELETE FROM `domain_groups`')
 	cfg.cursor.execute('DELETE FROM `domain_accounts`')
+	cfg.cursor.execute('DELETE FROM `domain_groups`')
+	cfg.cursor.execute('DELETE FROM `group_members`')
 	cfg.cursor.execute('DELETE FROM `domains`')
 	cfg.cursor.commit()
 	print "[+] Done."
 
-def group_members(grpname, dom=None, lvl=0):
+def group_members(grpname):
 
-	def fmt(row):
-		gname = color(row[1]+'\\'+row[0], 2, 1)
-		uname = color(row[1] +'\\'+ row[2].ljust(22), 3, 1)
-		u_rid = str(row[3]).ljust(6) if row[3] is not None else None
-		desc  = color(str(row[5] if row[5] is not None else ''), 4)
-		name  = color(str(row[4] if row[4] is not None else '').ljust(20), 4)
-		pswd  = color(str(row[6] if row[6] is not None else '').ljust(13), 6, 1)
+	def recurse(group_id, lvl):
 
-		return gname, uname, u_rid, desc, name, pswd, row[1], row[2]
+		hdr = '|   '*lvl
+		group_name = color(cfg.domain_list[dom_id][0] + '\\' + group_tree[group_id][0], 2, 1)
+		print hdr + ('\\_ Sub-' if lvl > 0 else '') + "Group {}:".format(group_name)
 
-	if dom == None:
-		res = cfg.cursor.execute("SELECT a.`group`, a.`domain`, a.`username` AS usr_or_grp, b.`rid` as ridb, b.`name`, b.`descr`, b.`password` "
-			"FROM domain_groups a "
-			"LEFT JOIN domain_accounts b ON (lower(a.`domain`||'\'||a.`username`)=lower(b.`domain`||'\'||b.`username`)) "
-			"WHERE UPPER(a.`group`) LIKE UPPER(?) "
-			"AND a.`domain` IN('"+ "','".join([d[0] for d in cfg.domain_scope]) +"') "
-			"GROUP BY usr_or_grp "
-			"ORDER BY a.`domain`||'\'||a.`username`", (grpname,)).fetchall()
-	
-		if len(res) == 0:
-			print "[!] Error: No such group."
-			clean_exit(1)
-	
-	else:
-			res = cfg.cursor.execute("SELECT a.`group`, a.`domain`, a.`username` AS usr_or_grp, b.`rid` as ridb, b.`name`, b.`descr`, b.`password` "
-			"FROM domain_groups a "
-			"LEFT JOIN domain_accounts b ON (lower(a.`domain`||'\'||a.`username`)=lower(b.`domain`||'\'||b.`username`)) "
-			"WHERE UPPER(a.`group`) LIKE UPPER(?) AND a.`domain`=?"
-			"ORDER BY a.`domain`||'\'||a.`username`", (grpname,dom)).fetchall()	
+		members = cfg.cursor.execute("""
+			SELECT m.account_id, m.group_id, m.is_group, g.name, d.domain, a.username, a.password, a.name, a.descr
+			FROM group_members AS m
+			LEFT JOIN domain_groups AS g ON (g.rid = m.group_id AND g.domain_id = m.domain_id)
+			LEFT JOIN domain_accounts AS a ON (a.rid = m.account_id AND a.domain_id = m.domain_id)
+			LEFT JOIN domains AS d ON (d.id = m.domain_id)
+			WHERE m.group_id = ? AND m.domain_id = ? AND m.is_group = 0
+			ORDER BY m.is_group ASC, m.account_id ASC
+		""", (group_id, dom_id)).fetchall()
 
-	hdr = ' '*lvl*5 + ('\\_ ' if lvl > 0 else '')
+		for member in members:
 
-	direct_users = []
-
-	if len(res) == 0:
-		print hdr+"No members found."
-
-	for row in res:
-		gname, uname, u_rid, desc, name, pswd, dom, usr_or_grp = fmt(row)
-
-		if u_rid == None: # This is a sub-group, not a username
-
-			print hdr+"Group '{}' contains sub-group {}".format(gname, uname)
-			group_members(usr_or_grp, dom, 1)
+			username = color(member[4] + '\\' + member[5], 3)
+			password = '' if not member[6] else color(member[6], 6, 1)
+			fullname = color(member[7], 4)
+			
+			print "%s|   + User: %s (%d) %s %s" % (hdr, username, member[0], password, fullname)
 		
-		else:
-			if lvl == 0:
-				direct_users.append(row)
-			else:
-				print hdr+ "Grp: {} Usr: {} RID: {} Pwd: {} Name: {} Desc: {}".format(gname, uname, u_rid, pswd, name, desc)
+		for subgroup in group_tree[group_id][1]:
+	
+			if subgroup not in seen_subgroups:
+				seen_subgroups.append(subgroup)
+				recurse(subgroup, lvl+1)
+	
+	for dom_id in cfg.domain_scope:
+	
+		group_tree = group_hierarchy(dom_id)
+		seen_subgroups = []
 
-	print ""
-	for usr in direct_users:
-		gname, uname, u_rid, desc, name, pswd, dom, usr_or_grp = fmt(usr)
+		root_group = cfg.cursor.execute('SELECT rid, name FROM domain_groups WHERE domain_id = ? AND LOWER(name) = ?', (dom_id, grpname.lower(),)).fetchone()
 
-		print "[+] Group {} has top-level member: {} RID: {}   Pwd: {} Name: {} Desc: {}".format(gname, uname, u_rid, pswd, name, desc)
+		if not root_group:
+			continue
 
-def get_user(username):
+		root_group_id, root_group_name = root_group
+
+		print "[+] Members of group '%s\\%s'\n" % (cfg.domain_list[dom_id][0], root_group_name)
+		recurse(root_group_id, 0)
+
+def get_user_info(username):
 	
 	if '\\' in username: # we specified the domain in the username instead of with -d
 		dom, usr = username.split('\\')
-		usr = '%'+ usr.upper() + '%'
-		res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE UPPER(`domain`)=UPPER(?) AND (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?)", (dom, usr, usr,))
-	else:
-		usr = '%'+ username.upper() + '%'
-		if cfg.domain_scope == cfg.domain_list: # Include all domains
-			res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?)", (usr,usr,))
-		else: # Filter on domain(s) specified
-			res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) LIKE ? OR UPPER(`name`) LIKE ?) AND `domain` IN('"+ "','".join([d[0] for d in cfg.domain_scope]) +"')", (usr,usr,))
+		usr = usr.upper()
+		dom_id = domain_id_from_name(dom)
+		res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE domain_id = ? AND (UPPER(`username`) = ? OR UPPER(`name`) = ?)", (dom, usr, usr,))
 
-	res = res.fetchall()
+	else:
+		usr = username.upper()
+
+		# Include all domains
+		if cfg.domain_scope == [] or cfg.domain_scope == cfg.domain_list.keys(): 
+			res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) = ? OR UPPER(`name`) = ?)", (usr,usr,))
+		
+		# Filter on domain(s) specified
+		else:
+			res = cfg.cursor.execute("SELECT * FROM domain_accounts WHERE (UPPER(`username`) = ? OR UPPER(`name`) = ?) AND `domain_id` IN('"+ "','".join(cfg.domain_scope) +"')", (usr,usr,))
+
+	return res.fetchone()
+
+def group_hierarchy(dom_id):
+	groups = {}
+
+	res = cfg.cursor.execute("""
+		SELECT g.rid, g.name, GROUP_CONCAT(m.account_id) AS member_group_ids 
+		FROM domain_groups AS g
+		LEFT JOIN group_members AS m ON (m.group_id = g.rid AND m.domain_id = g.domain_id AND m.is_group=1)
+		WHERE g.domain_id = ?
+		GROUP BY g.rid""", (dom_id,)).fetchall()
 
 	for row in res:
-		print color("Username : %s" % row[3], 9, 1)
-		print "RID      : %d" % row[0]
-		print "Domain   : %s" % row[2]
-		print "Password : %s" % row[4]
-		print "LM Hash  : %s" % row[5]
-		print "NT Hash  : %s" % row[6]
-		print "Real Name: %s" % row[7]
-		print "Descript : %s" % row[8]
+		groups[row[0]] = (row[1], map(int, row[2].split(',')) if row[2] else [])
+
+	return groups
+
+def get_user(username):
+
+	user_info = get_user_info(username)
+
+	print color("Username : %s" % user_info[2], 9, 1)
+	print "RID      : %d" % user_info[0]
+	print "Domain   : %s" % cfg.domain_list[user_info[1]][0]
+	print "Password : %s" % user_info[3]
+	print "LM Hash  : %s" % user_info[4]
+	print "NT Hash  : %s" % user_info[5]
+	print "Real Name: %s" % user_info[6]
+	print "Descript : %s" % user_info[7]
+
+	grps = cfg.cursor.execute("""
+		SELECT rid, name FROM domain_groups
+		LEFT JOIN group_members ON (group_members.group_id = domain_groups.rid)
+		WHERE group_members.account_id = ? AND domain_groups.domain_id = ?
+		ORDER BY domain_groups.name ASC
+		""", (user_info[0], user_info[1])).fetchall()
+
+	print
+	print "First Degree Group Memberships:"
+	print
+
+	direct_groups = []
+	for grp in grps:
+		direct_groups.append(grp[0])
+		print "   - %s (%d)" % (grp[1], grp[0])
+
+	group_tree = group_hierarchy(user_info[1])
 	
-	 	grps = cfg.cursor.execute("SELECT `rid`, `group` FROM domain_groups WHERE LOWER(`username`)=LOWER(?) AND LOWER(`domain`)=LOWER(?) ORDER BY rid ASC", (row[3],row[2])).fetchall()
-		print "\nGroup Memberships:\n   - %s" % '\n   - '.join(["%s (%d)" % (x[1], x[0]) for x in set(grps)])
-		print ""
+	print
+	print "Inherited Group Memberships:"
+	print
+
+	group_tree = group_hierarchy(user_info[1])
+	inherited_groups = []
+
+	def recurse(g):
+		for group_id, subgroups in group_tree.iteritems():
+			if g in subgroups[1] and group_id not in inherited_groups:
+				inherited_groups.append(group_id)
+				recurse(group_id)
+
+	for g in direct_groups:
+		recurse(g)
+	
+	for g in inherited_groups:
+		print "   - %s (%d)" % (group_tree[g][0], g)
+
+	print
 
 def screenshot():
 
@@ -995,9 +1122,11 @@ def load_config():
 	cfg.cursor = sqlite3.connect(cfg.database)
 	cfg.cursor.text_factory = str
 
-	res = cfg.cursor.execute("SELECT `domain`, `fqdn` FROM domains").fetchall()
+	res = cfg.cursor.execute("SELECT id, `domain`, `fqdn` FROM domains").fetchall()
 	for row in res:
-		cfg.domain_list.append((row[0], row[1]))
+		cfg.domain_list[row[0]] = (row[1], row[2])
+
+	cfg.domain_scope = cfg.domain_list.keys()
 
 def start_project(name):
 
@@ -1038,10 +1167,10 @@ def start_project(name):
 
 		print "[+] Creating database..."
 		cfg.cursor = sqlite3.connect(cfg.database)
-		cfg.cursor.execute('CREATE TABLE domain_accounts (id INTEGER PRIMARY KEY, rid, domain varchar(32), username varchar(32), password varchar(32), lm_hash varchar(32), nt_hash varchar(32), name varchar(32), descr varchar(32), active INTEGER)')
-		cfg.cursor.execute('CREATE TABLE domain_controllers (id INTEGER PRIMARY KEY, domain varchar(32), hostname varchar(32), ipaddr varchar(32), allow_axfr INTEGER, allow_anon_enum INTEGER)')
-		cfg.cursor.execute('CREATE TABLE domain_groups (id INTEGER PRIMARY KEY, rid INTEGER, domain varchar(32), `group` varchar(32), username varchar(32))')
 		cfg.cursor.execute('CREATE TABLE domains (id INTEGER PRIMARY KEY, domain varchar(32), fqdn varchar(64))')
+		cfg.cursor.execute('CREATE TABLE domain_accounts (rid INTEGER, domain_id INTEGER, username varchar(32), password varchar(32), lm_hash varchar(32), nt_hash varchar(32), name varchar(32), descr varchar(32), PRIMARY KEY (rid, domain_id))')
+		cfg.cursor.execute('CREATE TABLE domain_groups (rid INTEGER, domain_id INTEGER, name varchar(32), PRIMARY KEY (rid, domain_id))')
+		cfg.cursor.execute('CREATE TABLE group_members (id INTEGER PRIMARY KEY, domain_id INTEGER, account_id INTEGER, group_id INTEGER, is_group INTEGER)')
 		cfg.cursor.commit()
 		cfg.cursor.close()
 
@@ -1051,15 +1180,16 @@ def passwd_or_hash(uname):
 
 	if '\\' in uname:
 		dom, usr = uname.split('\\')
+		dom_id = domain_id_from_name(dom)
 
-		res = cfg.cursor.execute("SELECT rid, domain, username, password, nt_hash "
+		res = cfg.cursor.execute("SELECT rid, domain_id, username, password, nt_hash "
 			"FROM domain_accounts "
-			"WHERE LOWER(domain)=LOWER(?) "
+			"WHERE domain_id = ? "
 			"AND LOWER(username)=LOWER(?) "
-			"LIMIT 1", (dom, usr,))
+			"LIMIT 1", (dom_id, usr,))
 
 	else:
-		res = cfg.cursor.execute("SELECT rid, domain, username, password, nt_hash "
+		res = cfg.cursor.execute("SELECT rid, domain_id, username, password, nt_hash "
 			"FROM domain_accounts "
 			"WHERE LOWER(username)=LOWER(?) "
 			"LIMIT 1", (uname,))
@@ -1070,7 +1200,7 @@ def passwd_or_hash(uname):
 		print "[!] Error: user not found in database."
 		clean_exit(1)
 	
-	rid, domain, username, password, nt_hash = fetch[0]
+	rid, domain_id, username, password, nt_hash = fetch[0]
 	print password if password != "" else nt_hash
 
 def run(cmd):

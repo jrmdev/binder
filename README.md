@@ -32,6 +32,11 @@ Otherwise only standard python libs.
 
 **Command line arguments**
 ```
+usage: binder [-h] [-s <project_name>] [-y] [-d <domain_name>] [-x <filename>]
+              [-a <filename>] [-c [<levels> [<levels> ...]]] [-g <group_name>]
+              [-f] [-p] [-z <username>] [-u <username>] [-S <search_term>]
+              [-o] [-v]
+
   -h, --help            show this help message and exit
   -s <project_name>, --start <project_name>
                         Start a new project or resume an existing project
@@ -48,7 +53,7 @@ Otherwise only standard python libs.
   -c [<levels> [<levels> ...]], --crack [<levels> [<levels> ...]]
                         Run multiple password cracking attacks. Pass a space-
                         separated list of levels. Levels: 1: Local db, 2:
-                        single, 3: dictionaries/rules, 4: masks, 5: markov, 6:
+                        single, 3: dictionaries/rules, 4: markov, 5: masks, 6:
                         brute-force. Default: 1 2
   -g <group_name>, --group <group_name>
                         Return group members with usernames and passwords (if
@@ -59,6 +64,8 @@ Otherwise only standard python libs.
                         Output the user's password or otherwise NT hash
   -u <username>, --user <username>
                         Display all the information about a user.
+  -S <search_term>, --search <search_term>
+                        Search the database.
   -o, --report          Generate a report
   -v, --verbose         Enable debug messages
 
