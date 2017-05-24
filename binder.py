@@ -138,11 +138,17 @@ def main():
 	if not os.path.exists(cfg.config_file):
 		
 		sample = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.sample')
-		default_conf = open(sample).read()
-		open(cfg.config_file, 'w').write(default_conf)
 
-		print "[*] Sample configuration file copied to %s" % cfg.config_file
-		print "[*] Please edit the file and run this program again."
+		if os.path.exists(sample):
+			default_conf = open(sample).read()
+			open(cfg.config_file, 'w').write(default_conf)
+
+			print "[*] Sample configuration file copied to %s" % cfg.config_file
+			print "[*] Please edit the file and run this program again."
+
+		else:
+			print "[*] Please copy the config.sample file to ~/.binder, edit it, and run this program again."
+	
 		sys.exit(0)
 
 	# Config File parsing
@@ -536,11 +542,12 @@ def crack_hashes(levels=[1, 2]):
 		return dict_list
 
 	def generate_hash_file():
-		res = cfg.cursor.execute("SELECT `username`, `rid`, `lm_hash`, `nt_hash` FROM domain_accounts WHERE `password`=''").fetchall()
+		res = cfg.cursor.execute("SELECT `username`, `rid`, `lm_hash`, `nt_hash` FROM domain_accounts WHERE `password` IS NULL").fetchall()
 
-		f = open(cfg.hash_file, 'wb')
-		for row in res:
-			f.write('%s:%s:%s:%s:::\n' % (row[0], row[1], row[2], row[3]))
+		with open(cfg.hash_file, 'w') as f:
+			for row in res:
+				f.write('%s:%s:%s:%s:::\n' % (row[0], row[1], row[2], row[3]))
+		
 		f.close()
 
 	def update_dict_file():
@@ -549,7 +556,7 @@ def crack_hashes(levels=[1, 2]):
 		else:
 			words = []
 
-		res = cfg.cursor.execute("SELECT DISTINCT `password` FROM domain_accounts WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchall()
+		res = cfg.cursor.execute("SELECT DISTINCT `password` FROM domain_accounts WHERE `password` IS NOT NULL AND `password` NOT LIKE '%???????%'").fetchall()
 
 		for row in res:
 			words.append(row[0])
@@ -713,7 +720,7 @@ def crack_hashes(levels=[1, 2]):
 
 			monitor_crack_job(fmt, 'bf', 10)
 
-	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password`!='' AND `password` NOT LIKE '%???????%'").fetchone()
+	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password` IS NOT NULL AND `password` NOT LIKE '%???????%'").fetchone()
 	print "[+] %d passwords cracked." % cracked[0]
 
 def sanitize(s):
@@ -737,12 +744,13 @@ def parse_enum(file):
 
 	lines = file.readlines()
 	lines = map(sanitize, lines)
+	dom_id = None
 
 	for l in lines:
 
-		if l.startswith('Domain Name: '):
-			domain = l.split(' ', 3)
-			dom_short, dom_long, dom_id = handle_domains(domain[2])
+		if l.startswith('Domain Name: ') or l.startswith('[+] Got domain/workgroup name:'):
+			domain = l.split(' ')
+			dom_short, dom_long, dom_id = handle_domains(domain[-1])
 
 	users = get_users(dom_id)
 
@@ -995,7 +1003,7 @@ def group_members(grpname):
 
 		hdr = '|   '*lvl
 		group_name = color(cfg.domain_list[dom_id][0] + '\\' + group_tree[group_id][0], 2, 1)
-		print hdr + ('\\_ Sub-' if lvl > 0 else '') + "Group {}:".format(group_name)
+		print hdr + ('\\_ Sub-' if lvl > 0 else '') + "Group {} ({}):".format(group_name, group_id)
 
 		members = cfg.cursor.execute("""
 			SELECT m.account_id, m.group_id, m.is_group, g.name, d.domain, a.username, a.password, a.name, a.descr
@@ -1032,8 +1040,6 @@ def group_members(grpname):
 			continue
 
 		root_group_id, root_group_name = root_group
-
-		print "[+] Members of group '%s\\%s'\n" % (cfg.domain_list[dom_id][0], root_group_name)
 		recurse(root_group_id, 0)
 
 def get_user_info(username):
