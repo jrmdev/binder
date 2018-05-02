@@ -36,18 +36,26 @@ The script `ldif_import.py` makes it possible to populate binder's database from
 
 `ldapsearch -h <ip> -x -D <username> -w <password> -b <base DN> -E pr=1000/noprompt -o ldif-wrap=no > output.ldap`
 
-Then, call the script as follows. It will connect to the binder database for the active project, and populate the user accounts, groups, and descriptions.
+Then, call binder as follows. It will populate the user accounts, groups, and descriptions:
+
+`binder -l output.ldap`
+
+Alternatively, the `ldap_import.py` script can be used standalone. It will connect and use the binder database for the active project:
 
 `python ldif_import.py output.ldap`
+
 
 
 **Command line arguments**
 ```
 usage: binder [-h] [-s <project_name>] [-y] [-d <domain_name>] [-x <filename>]
-              [-a <filename>] [-c [<levels> [<levels> ...]]] [-g <group_name>]
-              [-f] [-p] [-z <username>] [-u <username>] [-S <search_term>]
-              [-o] [-v]
+              [-l <filename>] [-a <filename>] [-c [<levels> [<levels> ...]]]
+              [-g <group_name>] [-f] [-p] [-z <username>] [-u <username>]
+              [-S <search_term>] [-o] [-v]
 
+binder version 2.0
+
+optional arguments:
   -h, --help            show this help message and exit
   -s <project_name>, --start <project_name>
                         Start a new project or resume an existing project
@@ -55,11 +63,17 @@ usage: binder [-h] [-s <project_name>] [-y] [-d <domain_name>] [-x <filename>]
   -d <domain_name>, --domain <domain_name>
                         Limit all actions to this domain. (i.e. when querying
                         information)
-  -x <filename>, --update_hashes <filename>
+  -x <filename>, --update-hashes <filename>
                         Load creds into db from dump file. Provide pwdump-
                         style file
-  -a <filename>, --update_accounts <filename>
-                        Load user and parser info into db. Provide enum4linux
+  -l <filename>, --ldif-import <filename>
+                        Load user and group information from LDIF export.
+                        Provide LDIF file. The LDIF file can be obtained with:
+                        "ldapsearch -h <ip> -x -D <username> -w <password> -b
+                        <base DN> -E pr=1000/noprompt -o ldif-wrap=no >
+                        ldap.output"
+  -a <filename>, --update-accounts <filename>
+                        Load user and group info into db. Provide enum4linux
                         output file
   -c [<levels> [<levels> ...]], --crack [<levels> [<levels> ...]]
                         Run multiple password cracking attacks. Pass a space-
@@ -69,7 +83,7 @@ usage: binder [-h] [-s <project_name>] [-y] [-d <domain_name>] [-x <filename>]
   -g <group_name>, --group <group_name>
                         Return group members with usernames and passwords (if
                         cracked)
-  -f, --flush           Delete user and parser data from db
+  -f, --flush           Delete user and group data from db
   -p, --passwords       Display all cracked passwords
   -z <username>, --getpass <username>
                         Output the user's password or otherwise NT hash

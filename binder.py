@@ -8,6 +8,7 @@ import re
 import hashlib
 import argparse
 import ConfigParser
+import ldif_import
 
 from threading import Thread
 from time import sleep
@@ -24,12 +25,12 @@ except:
 	print "[!] Please install python-sqlite3 extension."
 	sys.exit(0)
 
-__version__ = 1.0
+__version__ = 2.0
 __prog_name__ = 'binder'
 
 def main():
 
-	parser = argparse.ArgumentParser(description='%s version %f' % (__prog_name__, __version__))
+	parser = argparse.ArgumentParser(description='%s version %.1f' % (__prog_name__, __version__))
 	exclusive = parser.add_mutually_exclusive_group()
 
 	exclusive.add_argument(
@@ -54,7 +55,7 @@ def main():
 		default=False)
 
 	exclusive.add_argument(
-		'-x', '--update_hashes',
+		'-x', '--update-hashes',
 		action='store',
 		dest='update_hashes',
 		metavar='<filename>',
@@ -63,12 +64,21 @@ def main():
 		default=False)
 
 	exclusive.add_argument(
-		'-a', '--update_accounts',
+		'-l', '--ldif-import',
+		action='store',
+		dest='ldif_file',
+		metavar='<filename>',
+		type=argparse.FileType('r'),
+		help='Load user and group information from LDIF export. Provide LDIF file. The LDIF file can be obtained with: "ldapsearch -h <ip> -x -D <username> -w <password> -b <base DN> -E pr=1000/noprompt -o ldif-wrap=no > ldap.output"',
+		default=False)
+
+	exclusive.add_argument(
+		'-a', '--update-accounts',
 		action='store',
 		dest='update_accounts',
 		metavar='<filename>',
 		type=argparse.FileType('r'),
-		help='Load user and parser info into db. Provide enum4linux output file',
+		help='Load user and group info into db. Provide enum4linux output file',
 		default=False)
 
 	exclusive.add_argument('-c', '--crack',
@@ -89,7 +99,7 @@ def main():
 
 	exclusive.add_argument('-f', '--flush',
 		action='store_true',
-		help='Delete user and parser data from db',
+		help='Delete user and group data from db',
 		default=False)
 
 	exclusive.add_argument('-p', '--passwords',
@@ -195,6 +205,9 @@ def main():
 
 	elif cfg.update_hashes:
 		update_hashes(cfg.update_hashes)
+
+	elif cfg.ldif_file:
+		import_ldif(cfg.ldif_file)
 
 	elif cfg.update_accounts:
 		update_accounts(cfg.update_accounts)
@@ -721,6 +734,14 @@ def crack_hashes(levels=[1, 2]):
 	cracked = cfg.cursor.execute("SELECT COUNT(rid) AS nb FROM `domain_accounts` WHERE `password` IS NOT NULL AND `password` NOT LIKE '%???????%'").fetchone()
 	print "[+] %d passwords cracked." % cracked[0]
 
+def import_ldif(ldif_file):
+
+	if not ldif_import.get_confirmation('Do you really want to update the database for the "%s" project?' % cfg.current_project):
+		clean_exit()
+
+	ldif_import.cfg = cfg
+	ldif_import.main()
+
 def sanitize(s):
 	s = s.strip()
 	s = s.decode('latin1', 'ignore')
@@ -1206,8 +1227,8 @@ def start_project(name):
 		print "[+] Creating database..."
 		cfg.cursor = sqlite3.connect(cfg.database)
 		cfg.cursor.execute('CREATE TABLE domains (id INTEGER PRIMARY KEY, domain varchar(32), fqdn varchar(64))')
-		cfg.cursor.execute('CREATE TABLE domain_accounts (rid INTEGER, domain_id INTEGER, username varchar(32), password varchar(32), lm_hash varchar(32), nt_hash varchar(32), name varchar(32), descr varchar(32), PRIMARY KEY (rid, domain_id))')
-		cfg.cursor.execute('CREATE TABLE domain_groups (rid INTEGER, domain_id INTEGER, name varchar(32), PRIMARY KEY (rid, domain_id))')
+		cfg.cursor.execute('CREATE TABLE domain_accounts (rid INTEGER, domain_id INTEGER, username varchar(32) NULL, password varchar(32) NULL, lm_hash varchar(32) NULL, nt_hash varchar(32) NULL, name varchar(32) NULL, descr varchar(32) NULL, PRIMARY KEY (rid, domain_id))')
+		cfg.cursor.execute('CREATE TABLE domain_groups (rid INTEGER, domain_id INTEGER, name varchar(32) NULL, PRIMARY KEY (rid, domain_id))')
 		cfg.cursor.execute('CREATE TABLE group_members (idx varchar(16), domain_id INTEGER, account_id INTEGER, group_id INTEGER, is_group INTEGER, PRIMARY KEY (idx))')
 		cfg.cursor.commit()
 		cfg.cursor.close()

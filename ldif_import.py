@@ -71,59 +71,23 @@ def get_confirmation(text):
 
 	return res.lower() == 'y'
 
-if __name__ == '__main__':
-
-	if len(sys.argv) == 1:
-		sys.argv.append('--help')
-
-	parser = argparse.ArgumentParser(description='%s LDIF import' % __prog_name__)
-
-	parser.add_argument(
-		'file',
-		action='store',
-		metavar='<ldif_filename>',
-		type=argparse.FileType('r'),
-		help='File name to read LDAP export from.',
-		default=False)
-
-	cfg = parser.parse_args()
-	cfg.config_file  = os.path.join(os.path.expanduser('~'), '.%s' % __prog_name__)
-
-	CP = ConfigParser.ConfigParser()
-	CP.read(cfg.config_file)
-	
-	try:
-		cfg.project_dir     = os.path.expanduser(CP.get('core', 'PROJECTS_PATH').strip())
-		cfg.current_project = CP.get('core', 'CURRENT_PROJECT').strip()
-
-	except ConfigParser.NoOptionError:
-		sys.exit("[!] Error: some fields are missing from the configuration file.")
-
-	if not get_confirmation('Do you really want to update the database for the "%s" project?' % cfg.current_project):
-		sys.exit(1)
-
-	cfg.db_filename     = '%s.db' % __prog_name__
-	cfg.base_dir        = os.path.join(cfg.project_dir, cfg.current_project)
-	cfg.binder_dir      = os.path.join(cfg.base_dir, '.'+__prog_name__)
-	cfg.database        = os.path.join(cfg.binder_dir, cfg.db_filename)
-
-	if not os.path.exists(cfg.database):
-		sys.exit("[!] Error: database not found for this project. Please start the project first.")
-
-	cfg.cursor = sqlite3.connect(cfg.database)
-	cfg.cursor.text_factory = str
+def main():
 
 	cfg.domain_list = {}
-	res = cfg.cursor.execute("SELECT id, `domain`, `fqdn` FROM domains").fetchall()
-	for row in res:
+	for row in cfg.cursor.execute("SELECT id, `domain`, `fqdn` FROM domains").fetchall():
 		cfg.domain_list[row[0]] = (row[1], row[2])
 
+	existing_users = []
+	for row in cfg.cursor.execute("SELECT rid, domain_id FROM domain_accounts WHERE nt_hash IS NOT NULL").fetchall():
+		existing_users.append((row[0], row[1]))
+
 	print "[*] Parsing input file..."
-	ldif = ldif_to_dict(cfg.file.name)
+	ldif = ldif_to_dict(cfg.ldif_file.name)
 
 	domains = []
 	groups = []
-	users = []
+	users_ins = []
+	users_upd = []
 	members = []
 
 	print "[*] Extracting domains..."
@@ -161,7 +125,7 @@ if __name__ == '__main__':
 				groups.append((sid, dom_id, name))
 				group_members[sid] = v['member'] if 'member' in v else []
 			except:
-				print "exp1"
+				pass
 
 		# user
 		if 'objectClass' in v and v['objectClass'] == ['top', 'person', 'organizationalPerson', 'user']:
@@ -174,9 +138,12 @@ if __name__ == '__main__':
 	
 			try:
 				user_to_sid[dn] = sid
-				users.append((sid, dom_id, username, None, None, None, name, descr))
+				if (sid, dom_id) in existing_users:
+					users_upd.append((username, name, descr, sid, dom_id))
+				else:
+					users_ins.append((sid, dom_id, username, name, descr))
 			except:
-				print "exp2."
+				pass
 
 	print "[*] Resolving group memberships..."
 	for group_id, v in group_members.iteritems():
@@ -199,10 +166,13 @@ if __name__ == '__main__':
 
 	print "[*] Updating database..."
 
-	res_u = cfg.cursor.executemany("INSERT OR REPLACE INTO domains (id, domain, fqdn) VALUES (?, ?, ?)", domains)
-	print "[+] %d domains updated." % res_u.rowcount
+	res_d = cfg.cursor.executemany("INSERT OR REPLACE INTO domains (id, domain, fqdn) VALUES (?, ?, ?)", domains)
+	print "[+] %d domains updated." % res_d.rowcount
 
-	res_u = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, password, lm_hash, nt_hash, name, descr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", users)
+	res_i = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, name, descr) VALUES (?, ?, ?, ?, ?)", users_ins)
+	print "[+] %d user accounts inserted." % res_i.rowcount
+
+	res_u = cfg.cursor.executemany("UPDATE domain_accounts SET username=?, name=?, descr=? WHERE rid=? and domain_id=?", users_upd)
 	print "[+] %d user accounts updated." % res_u.rowcount
 
 	res_g = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_groups (rid, domain_id, name) VALUES(?, ?, ?)", groups)
@@ -213,3 +183,48 @@ if __name__ == '__main__':
 
 	cfg.cursor.commit()
 	print "[*] Done."
+
+if __name__ == '__main__':
+
+	if len(sys.argv) == 1:
+		sys.argv.append('--help')
+
+	parser = argparse.ArgumentParser(description='%s LDIF import' % __prog_name__)
+
+	parser.add_argument(
+		'file',
+		action='store',
+		metavar='<ldif_file>',
+		type=argparse.FileType('r'),
+		help='File name to read LDAP export from.',
+		default=False)
+
+	cfg = parser.parse_args()
+	cfg.config_file  = os.path.join(os.path.expanduser('~'), '.%s' % __prog_name__)
+
+	CP = ConfigParser.ConfigParser()
+	CP.read(cfg.config_file)
+	
+	try:
+		cfg.project_dir     = os.path.expanduser(CP.get('core', 'PROJECTS_PATH').strip())
+		cfg.current_project = CP.get('core', 'CURRENT_PROJECT').strip()
+
+	except ConfigParser.NoOptionError:
+		sys.exit("[!] Error: some fields are missing from the configuration file.")
+
+	if not get_confirmation('Do you really want to update the database for the "%s" project?' % cfg.current_project):
+		sys.exit(1)
+
+	cfg.db_filename     = '%s.db' % __prog_name__
+	cfg.base_dir        = os.path.join(cfg.project_dir, cfg.current_project)
+	cfg.binder_dir      = os.path.join(cfg.base_dir, '.'+__prog_name__)
+	cfg.database        = os.path.join(cfg.binder_dir, cfg.db_filename)
+
+	if not os.path.exists(cfg.database):
+		sys.exit("[!] Error: database not found for this project. Please start the project first.")
+
+	cfg.cursor = sqlite3.connect(cfg.database)
+	cfg.cursor.text_factory = str
+
+	main()
+
