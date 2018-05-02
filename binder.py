@@ -1047,7 +1047,7 @@ def group_members(grpname):
 			password = '' if not member[6] else color(member[6], 6, 1)
 			fullname = color(member[7], 4)
 			
-			print "%s|   + User: %s (%d) %s %s" % (hdr, username, member[0], password, fullname)
+			print "%s|   + User: %s (%d) %s %s" % (hdr, username, member[0], fullname, password)
 		
 		for subgroup in group_tree[group_id][1]:
 	
@@ -1130,8 +1130,6 @@ def get_user(username):
 		for grp in grps:
 			direct_groups.append(grp[0])
 			print "   - %s (%d)" % (grp[1], grp[0])
-
-		group_tree = group_hierarchy(user_info[1])
 		
 		print
 		print "Inherited Group Memberships:"
