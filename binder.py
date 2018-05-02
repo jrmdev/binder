@@ -389,7 +389,7 @@ def search_db(keyword):
 		separator = '+'
 
 		columns = tuple(map(lambda x: x[0], headers))
-		tablesize = [map(len, row) for row in [columns]+data]
+		tablesize = [map(len, [str(_) for _ in row]) for row in [columns]+data]
 
 		for w in map(max, zip(*tablesize)):
 			vsep += " %-"+"%ss |" % (w,)
@@ -547,8 +547,6 @@ def crack_hashes(levels=[1, 2]):
 		with open(cfg.hash_file, 'w') as f:
 			for row in res:
 				f.write('%s:%s:%s:%s:::\n' % (row[0], row[1], row[2], row[3]))
-		
-		f.close()
 
 	def update_dict_file():
 		if os.path.exists(cfg.dict_file):
@@ -826,7 +824,7 @@ def parse_enum(file):
 				continue
 
 			idx = hex(int('%d%d%d' % (dom_id, account_id, rid)))[2:]
-			members.append((idx, account_id, dom_id, rid, is_group))
+			members.append((idx, dom_id, account_id, rid, is_group))
 
 	return users, groups, members
 
@@ -843,7 +841,7 @@ def update_accounts(file):
 	res_g = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_groups (rid, domain_id, name) VALUES(?, ?, ?)", groups.values())
 	print "[+] %d unique groups updated." % res_g.rowcount
 
-	res_m = cfg.cursor.executemany("INSERT OR REPLACE INTO group_members (idx, account_id, domain_id, group_id, is_group) VALUES(?, ?, ?, ?, ?)", members)
+	res_m = cfg.cursor.executemany("INSERT OR REPLACE INTO group_members (idx, domain_id, account_id, group_id, is_group) VALUES(?, ?, ?, ?, ?)", members)
 	print "[+] %d group memberships updated." % res_m.rowcount
 
 	cfg.cursor.commit()
@@ -892,6 +890,30 @@ def handle_domains(dom_str=''):
 	
 	return dom_short, dom_long, insert_id
 
+def get_cleartexts():
+
+	# Getting previously cracked passwords from john.pot
+	print "[+] Reading cracked passwords..."
+	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
+
+	cleartexts = {}
+	cracked  = run(cfg.jtr_path + ' --format=LM --pot=%s --show %s' % (cfg.pot_file, file.name))
+	cracked += run(cfg.jtr_path + ' --format=NT --pot=%s --show %s' % (cfg.pot_file, file.name))
+
+	for l in map(sanitize, cracked.split('\n')):
+
+		if ':::' not in l: continue
+		tab = l.split(':')
+
+		# special case when there is a ':' in the password
+		while len(tab) > 8:
+			tab[1] += ':'+tab[2]; del tab[2]
+
+		if len(tab[1]) > 0 and '???????' not in tab[1]:
+			cleartexts[tab[4]] = tab[1]
+
+	return cleartexts
+
 def update_hashes(file):
 
 	res = -1
@@ -923,32 +945,15 @@ def update_hashes(file):
 		curr_dom, dom_long = cfg.domain_list[res]
 		dom_id = res
 
-	users = get_users(dom_id)
-
-	# Getting previously cracked passwords from john.pot
-	print "[+] Reading cracked passwords..."
-	cfg.pot_file  = os.path.join(cfg.binder_dir, 'john.pot')
-
-	cleartexts = {}
-	cracked  = run(cfg.jtr_path + ' --format=LM --pot=%s --show %s' % (cfg.pot_file, file.name))
-	cracked += run(cfg.jtr_path + ' --format=NT --pot=%s --show %s' % (cfg.pot_file, file.name))
-
-	for l in map(sanitize, cracked.split('\n')):
-
-		if ':::' not in l: continue
-		tab = l.split(':')
-
-		# special case when there is a ':' in the password
-		while len(tab) > 8:
-			tab[1] += ':'+tab[2]; del tab[2]
-
-		if len(tab[1]) > 0 and '???????' not in tab[1]:
-			cleartexts[tab[4]] = tab[1]
+	# Get previously cracked passwords
+	cleartexts = get_cleartexts()
 
 	# Reading pwdump file
 	lines = file.readlines()
 	lines = map(sanitize, lines)
 
+	users = get_users(dom_id)
+	
 	for l in lines:
 
 		if ':::' not in l or '$' in l: continue
@@ -1137,7 +1142,7 @@ def screenshot():
 	else:
 		full_path = os.path.join('/tmp', '.binder.png')
 
-	os.popen('scrot -s "%s"' % full_path)
+	os.popen('scrot -q 90 -s "%s"' % full_path)
 	os.popen('xclip -selection clipboard -t image/png "%s"' % full_path)
 
 def load_config():

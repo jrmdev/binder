@@ -30,6 +30,17 @@ And make the script executable. On the first run, it will help you create the co
 
 Otherwise only standard python libs.
 
+**LDAP Import**
+
+The script `ldif_import.py` makes it possible to populate binder's database from an Active Directory LDIF export. To generate the LDIF file, use the following ldapsearch command. It requires a non-privileged username and passowrd, a domain controller IP address, and the AD Base DN.
+
+`ldapsearch -h <ip> -x -D <username> -w <password> -b <base DN> -E pr=1000/noprompt -o ldif-wrap=no > output.ldap`
+
+Then, call the script as follows. It will connect to the binder database for the active project, and populate the user accounts, groups, and descriptions.
+
+`python ldif_import.py output.ldap`
+
+
 **Command line arguments**
 ```
 usage: binder [-h] [-s <project_name>] [-y] [-d <domain_name>] [-x <filename>]
