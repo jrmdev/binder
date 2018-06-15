@@ -16,7 +16,7 @@ __prog_name__ = 'binder'
 
 def ldif_to_dict(ldif):
 	"""parses an ldif export into a python dictionary"""
-	
+
 	ldap = {}
 	with open(ldif) as file:
 		for line in file:
@@ -39,9 +39,9 @@ def ldif_to_dict(ldif):
 
 					if not isinstance(ldap[key][attr], list):
 						ldap[key][attr] = [ldap[key][attr]]
-					
+
 					ldap[key][attr].append(val)
-				
+
 				else:
 					ldap[key][attr] = val
 
@@ -129,13 +129,13 @@ def main():
 
 		# user
 		if 'objectClass' in v and v['objectClass'] == ['top', 'person', 'organizationalPerson', 'user']:
-			dn = v['dn']
-			name = v['name']
-			username = v['sAMAccountName']
-			descr = v['description'] if 'description' in v else None
-			
+			dn = str(v['dn'])
+			name = str(v['name'])
+			username = str(v['sAMAccountName'])
+			descr = str(v['description']) if 'description' in v else None
+
 			sid = get_string_sid_from_binary_sid(v['objectSid'])[1]
-	
+
 			try:
 				user_to_sid[dn] = sid
 				if (sid, dom_id) in existing_users:
@@ -204,7 +204,7 @@ if __name__ == '__main__':
 
 	CP = ConfigParser.ConfigParser()
 	CP.read(cfg.config_file)
-	
+
 	try:
 		cfg.project_dir     = os.path.expanduser(CP.get('core', 'PROJECTS_PATH').strip())
 		cfg.current_project = CP.get('core', 'CURRENT_PROJECT').strip()
@@ -227,4 +227,5 @@ if __name__ == '__main__':
 	cfg.cursor.text_factory = str
 
 	main()
+
 

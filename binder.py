@@ -6,6 +6,7 @@ import socket
 import shlex
 import re
 import hashlib
+import binascii
 import argparse
 import ConfigParser
 import ldif_import
@@ -146,7 +147,7 @@ def main():
 
 	# Handle first run
 	if not os.path.exists(cfg.config_file):
-		
+
 		sample = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.sample')
 
 		if os.path.exists(sample):
@@ -158,13 +159,13 @@ def main():
 
 		else:
 			print "[*] Please copy the config.sample file to ~/.binder, edit it, and run this program again."
-	
+
 		sys.exit(0)
 
 	# Config File parsing
 	CP = ConfigParser.ConfigParser()
 	CP.read(cfg.config_file)
-	
+
 	try:
 		cfg.project_dir     = os.path.expanduser(CP.get('core', 'PROJECTS_PATH').strip())
 		cfg.current_project = CP.get('core', 'CURRENT_PROJECT').strip()
@@ -188,7 +189,7 @@ def main():
 		if cfg.current_project == '':
 			print "[!] No project started. Start or resume a project with '%s start <project_name>'." % (sys.argv[0])
 			sys.exit(1)
-		
+
 		load_config()
 
 	if cfg.setdomain:
@@ -258,7 +259,7 @@ def domain_id_from_name(name):
 
 def get_users(dom_id):
 	users = {}
-	
+
 	res = cfg.cursor.execute("""
 		SELECT rid, domain_id, username, password, lm_hash, nt_hash, name, descr 
 		FROM domain_accounts 
@@ -266,7 +267,7 @@ def get_users(dom_id):
 
 	for row in res:
 		users[row[0]] = row
-	
+
 	return users
 
 def report():
@@ -324,7 +325,7 @@ def report():
 
 			for row in [(x[0], x[1]) for x in most_used if x[0] > 1]:
 				chart_1.add(row[1], row[0])
-			
+
 			chart_1.render_to_png(os.path.join(cfg.binder_dir, '%s.mostused.png' % dom_name))
 
 
@@ -436,8 +437,9 @@ def search_db(keyword):
 
 	headers_users = res_users.description
 	headers_groups = res_groups.description
-	data_users = res_users.fetchall()
-	data_groups = res_groups.fetchall()
+
+	data_users = [tuple([_[:70] + '...' if _ and len(_) > 70 else _ for _ in d]) for d in res_users.fetchall()]
+	data_groups = [tuple([_[:70] + '...' if _ and len(_) > 70 else _ for _ in d]) for d in res_groups.fetchall()]
 
 	if len(data_users) > 0:
 		print formatted_table(headers_users, data_users)
@@ -533,7 +535,7 @@ def crack_hashes(levels=[1, 2]):
 		# Enable some rules according to dict size
 		if file_size < Mb(70):
 			return '--rules:Wordlist'
-		
+
 		if file_size < Mb(1.5):
 			return '--rules:Extra'
 
@@ -576,7 +578,7 @@ def crack_hashes(levels=[1, 2]):
 
 	def monitor_crack_job(fmt='nt', mode='bf', delay=2):
 		sleep(.3)
-		
+
 		cpt = 0
 		while cfg.job_running:
 			try:
@@ -591,7 +593,7 @@ def crack_hashes(levels=[1, 2]):
 	def get_cracked_hashes(fmt='nt'):
 
 		def find_good_case(passwd, nt_hash):
-		
+
 			nt_hash = nt_hash.lower()
 
 			for p in product(*((c.upper(), c.lower()) for c in passwd)):
@@ -605,13 +607,13 @@ def crack_hashes(levels=[1, 2]):
 			return False
 
 		command = cfg.jtr_path +' --format=%s --pot=%s --show %s' % (fmt, cfg.pot_file, cfg.hash_file)
-	
+
 		found = []
 		for output in os.popen(command).readlines():
-			
+
 			if ':::' not in output:
 				continue
-			
+
 			output = output.strip()
 			#output = output.decode('utf-8')
 			tab = output.split(':')
@@ -625,7 +627,7 @@ def crack_hashes(levels=[1, 2]):
 
 				if '???????' in passwd:
 					continue
-					
+
 				if fmt == 'lm':
 					passwd = find_good_case(passwd, nt_hash)
 
@@ -636,7 +638,7 @@ def crack_hashes(levels=[1, 2]):
 
 					if (passwd, nt_hash) not in found:
 						found.append((passwd, nt_hash))
-	
+
 					cracked_in_session.append(nt_hash)
 
 		if len(found):
@@ -699,10 +701,10 @@ def crack_hashes(levels=[1, 2]):
 
 		for fmt in ['lm', 'nt']:
 			# masks = ['?1?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3?3','?1?2?2?2?3?3?3?3','?1?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?3','?1?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?3','?1?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3?3','?1?2?2?2?2?2?2?2?2?3','?1?3?3?3?3?3?3?3?4','?1?2?2?2?2?2?2?3?3?3','?1?2?3?3?3?3?3?3','?1?2?2?2?2?3?3','?1?2?2?2?2?2?2?2?3?3?3','?1?2?2?2?2?2?2?2?2?2?3?3','?3?3?3?3?3?4?1?3?2','?1?2?2?2?2?2?3','?2?1?3?3?3?3?3?3','?1?4?2?2?3?3?3?3?3']
-			
+
 			masks = filter_lm_masks(masks_from_dict) if fmt == 'lm' else masks_from_dict
 			print "\r[+] Running mask attack on %s with %d masks..." % (fmt, len(masks))
-			
+
 			for m in masks:
 
 				cmd = cfg.jtr_path +" --format=%s --pot=%s --nolog --max-run-time=%d --mask=%s --max-len=%d --fork=%d -1=[A-Z] -2=[a-z] -3=[0-9] -4='!@#$._/' %s" % (fmt, cfg.pot_file, cfg.jtr_tmout*60, m, len(m)/2, cpu_count(), cfg.hash_file)
@@ -717,15 +719,15 @@ def crack_hashes(levels=[1, 2]):
 
 			print "\r[+] Running brute-force attack on %s for %d minutes..." % (fmt, cfg.jtr_tmout)
 			if not os.path.exists('%s.%s.bf.rec' % (cfg.sess_file, fmt)):
-	
+
 				charset = 'lm_ascii' if fmt == 'lm' else 'ascii'
 				max_length = 7 if fmt == 'lm' else 12
 				cmd = cfg.jtr_path +" --format=%s --session=%s.%s.bf --pot=%s --nolog --incremental=%s --max-len=%d --max-run-time=%d --fork=%d %s" % (fmt, cfg.sess_file, fmt, cfg.pot_file, charset, max_length, cfg.jtr_tmout*60, cpu_count(), cfg.hash_file)
-			
+
 			else:
-	
+
 				cmd = cfg.jtr_path +" --restore=%s.%s.bf" % (cfg.sess_file, fmt)
-			
+
 			thread = Thread(target=run, args=(cmd,))
 			thread.start()
 
@@ -807,7 +809,7 @@ def parse_enum(file):
 	for l in lines:
 
 		if 'has member:' in l:
-			
+
 			if '\\' not in l:
 				continue
 
@@ -853,7 +855,7 @@ def update_accounts(file):
 
 	print "[+] Reading file..."
 	users, groups, members = parse_enum(file)
-	
+
 	print "[+] Updating database..."
 
 	res_u = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, password, lm_hash, nt_hash, name, descr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", users.values())
@@ -896,19 +898,19 @@ def handle_domains(dom_str=''):
 
 
 	domain_exists = cfg.cursor.execute('SELECT id, domain, fqdn FROM domains WHERE domain = ?', (dom_short, )).fetchone()
-	
+
 	if domain_exists:
 		dom_long = domain_exists[2] +', '+ dom_long
 		cfg.cursor.execute("UPDATE domains SET fqdn = ? WHERE domain = ?", (dom_long, dom_short))
 		insert_id = domain_exists[0]
-	
+
 	else:
 		res = cfg.cursor.execute("INSERT INTO domains(domain, fqdn) VALUES(?, ?)", (dom_short, dom_long))
 		insert_id = res.lastrowid
 
-	cfg.cursor.commit()	
+	cfg.cursor.commit()
 	cfg.domain_list[insert_id] = (dom_short, dom_long)
-	
+
 	return dom_short, dom_long, insert_id
 
 def get_cleartexts():
@@ -974,11 +976,11 @@ def update_hashes(file):
 	lines = map(sanitize, lines)
 
 	users = get_users(dom_id)
-	
+
 	for l in lines:
 
 		if ':::' not in l or '$' in l: continue
-		
+
 		tab = l.split(':')
 		tab[0] = tab[0].replace('(current)', '')
 		tab[0] = tab[0].replace('(current-disabled)', '')
@@ -998,16 +1000,16 @@ def update_hashes(file):
 		if '\\' in uname:
 			dom_extract, uname = uname.split('\\')
 			#dom_short, dom_long, dom_id = handle_domains(dom_extract)
-	
+
 		if rid in users:
 			users[rid] = (rid, dom_id, uname, password, lm_hash, nt_hash, users[rid][6], users[rid][7])
 		else:
-			users[rid] = (rid, dom_id, uname, password, lm_hash, nt_hash, None, None) 
+			users[rid] = (rid, dom_id, uname, password, lm_hash, nt_hash, None, None)
 
 	print "[+] Updating database..."
 	res_u = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, password, lm_hash, nt_hash, name, descr) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", users.values())
 	print "[+] %d user accounts updated." % res_u.rowcount
-	
+
 	if len(cleartexts):
 		print "[+] %d unique cleartexts." % len(cleartexts)
 
@@ -1046,17 +1048,17 @@ def group_members(grpname):
 			username = color(member[4] + '\\' + member[5], 3)
 			password = '' if not member[6] else color(member[6], 6, 1)
 			fullname = color(member[7], 4)
-			
+
 			print "%s|   + User: %s (%d) %s %s" % (hdr, username, member[0], fullname, password)
-		
+
 		for subgroup in group_tree[group_id][1]:
-	
+
 			if subgroup not in seen_subgroups:
 				seen_subgroups.append(subgroup)
 				recurse(subgroup, lvl+1)
-	
+
 	for dom_id in cfg.domain_scope:
-	
+
 		group_tree = group_hierarchy(dom_id)
 		seen_subgroups = []
 
@@ -1069,7 +1071,7 @@ def group_members(grpname):
 		recurse(root_group_id, 0)
 
 def get_user_info(username):
-	
+
 	if '\\' in username: # we specified the domain in the username instead of with -d
 		dom, usr = username.split('\\')
 		usr = usr.upper()
@@ -1106,14 +1108,11 @@ def get_user(username):
 		clean_exit()
 
 	for user_info in users_info:
-		print color("Username : %s" % user_info[2], 9, 1)
-		print "RID      : %d" % user_info[0]
-		print "Domain   : %s" % cfg.domain_list[user_info[1]][0]
-		print "Password : %s" % user_info[3]
-		print "LM Hash  : %s" % user_info[4]
-		print "NT Hash  : %s" % user_info[5]
+		print "Username : %s\\%s" % (cfg.domain_list[user_info[1]][0], user_info[2])
+		print "Password : %s" % '(unknown)' if not user_info[3] else user_info[3]
 		print "Real Name: %s" % user_info[6]
 		print "Descript : %s" % user_info[7]
+		print "Hash     : %s:%d:%s:%s:::" % (user_info[2], user_info[0], user_info[4], user_info[5])
 
 		grps = cfg.cursor.execute("""
 			SELECT rid, name FROM domain_groups
@@ -1123,17 +1122,14 @@ def get_user(username):
 			""", (user_info[0], user_info[1])).fetchall()
 
 		print
-		print "First Degree Group Memberships:"
+		print color("[+]", 2, 1), "First Degree Group Memberships:"
 		print
 
 		direct_groups = []
 		for grp in grps:
-			direct_groups.append(grp[0])
-			print "   - %s (%d)" % (grp[1], grp[0])
-		
-		print
-		print "Inherited Group Memberships:"
-		print
+			if grp[0] not in direct_groups:
+				direct_groups.append(grp[0])
+				print "   - %s (%d)" % (grp[1], grp[0])
 
 		group_tree = group_hierarchy(user_info[1])
 		inherited_groups = []
@@ -1146,17 +1142,28 @@ def get_user(username):
 
 		for g in direct_groups:
 			recurse(g)
-		
+
+		if len(inherited_groups):
+			print
+			print color("[+]", 2, 1), "Inherited Group Memberships:"
+			print
+
 		for g in inherited_groups:
 			print "   - %s (%d)" % (group_tree[g][0], g)
 
+		print
+		print "---"
 		print
 
 def screenshot():
 
 	filename = datetime.now().strftime("%Y-%m-%d_%H.%M.%S") + '.png'
 
-	if os.path.exists(cfg.shots_dir):
+	if os.path.exists(cfg.project_dir):
+
+		if not os.path.exists(cfg.shots_dir):
+			os.mkdir(cfg.shots_dir)
+
 		full_path = os.path.join(cfg.shots_dir, filename)
 	else:
 		full_path = os.path.join('/tmp', '.binder.png')
@@ -1198,7 +1205,7 @@ def start_project(name):
 	else:
 		print "[+] Starting project %s..." % name
 		os.mkdir(project_dir)
-	
+
 		try:
 			print "[+] Creating configuration files..."
 			os.mkdir(os.path.join(project_dir, '.'+cfg.prog_name))
@@ -1256,7 +1263,7 @@ def passwd_or_hash(uname):
 	if len(fetch) == 0:
 		print "[!] Error: user not found in database."
 		clean_exit(1)
-	
+
 	rid, domain_id, username, password, nt_hash = fetch[0]
 	print password if password != "" else nt_hash
 
@@ -1272,7 +1279,7 @@ def run(cmd):
 
 		if cfg.verbose:
 			print color("[<] %s" % ret.strip(), 2)
-		
+
 		cfg.job_running = False
 
 		return ret.strip() + "\n"
@@ -1289,3 +1296,4 @@ if __name__ == "__main__":
 		sys.argv.append('--help')
 
 	main()
+
