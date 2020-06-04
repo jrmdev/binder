@@ -1,11 +1,12 @@
 import sys, os
 import struct
 import argparse
-import ConfigParser
+import configparser
+import base64
 try:
 	import sqlite3
 except:
-	print "[!] Please install python-sqlite3 extension."
+	print("[!] Please install python-sqlite3 extension.")
 	sys.exit(0)
 
 """
@@ -33,38 +34,39 @@ def ldif_to_dict(ldif):
 				try:
 					attr, val = line.split(': ', 1)
 					attr = attr.strip(':')
+
+					if attr in ldap[key]:
+
+						if not isinstance(ldap[key][attr], list):
+							ldap[key][attr] = [ldap[key][attr]]
+
+						ldap[key][attr].append(val)
+
+					else:
+						ldap[key][attr] = val
 				except:
 					pass
-				if attr in ldap[key]:
-
-					if not isinstance(ldap[key][attr], list):
-						ldap[key][attr] = [ldap[key][attr]]
-
-					ldap[key][attr].append(val)
-
-				else:
-					ldap[key][attr] = val
 
 	return ldap
 
 # Function copied from ADoffline
 def get_string_sid_from_binary_sid(base64string):
-	binarysid = base64string.decode('base64')
-	version = struct.unpack('B', binarysid[0])[0]
+	binarysid = base64.b64decode(base64string)
+	version = struct.unpack('B', bytes([binarysid[0]]))[0]
 	assert version == 1, version
-	length = struct.unpack('B', binarysid[1])[0]
-	authority = struct.unpack('>Q', '\x00\x00' + binarysid[2:8])[0]
+	length = struct.unpack('B', bytes([binarysid[1]]))[0]
+	authority = struct.unpack('>Q', bytes([0, 0] + list(binarysid[2:8]) )) [0]
 	string = 'S-%d-%d' % (version, authority)
 	binarysid = binarysid[8:]
 	assert len(binarysid) == 4 * length
-	for i in xrange(length):
+	for i in range(length):
 		value = struct.unpack('<L', binarysid[4*i:4*(i+1)])[0]
 		string += '-%d' % (value)
 	return (string, value)
 
 def get_confirmation(text):
 	try:
-		res = raw_input(text +' (y/[n]): ').strip()
+		res = input(text +' (y/[n]): ').strip()
 	except KeyboardInterrupt:
 		print
 		return False
@@ -81,7 +83,7 @@ def main():
 	for row in cfg.cursor.execute("SELECT rid, domain_id FROM domain_accounts WHERE nt_hash IS NOT NULL").fetchall():
 		existing_users.append((row[0], row[1]))
 
-	print "[*] Parsing input file..."
+	print("[*] Parsing input file...")
 	ldif = ldif_to_dict(cfg.ldif_file.name)
 
 	domains = []
@@ -90,8 +92,8 @@ def main():
 	users_upd = []
 	members = []
 
-	print "[*] Extracting domains..."
-	for k, v in ldif.iteritems():
+	print("[*] Extracting domains...")
+	for k, v in ldif.items():
 
 		# domain
 		if 'objectClass' in v and v['objectClass'] == ['top', 'domain', 'domainDNS']:
@@ -99,7 +101,7 @@ def main():
 			dom_short = v['name'].upper()
 			dom_long = '.'.join(v['dn'][3:].split(',DC=')).upper()
 
-			for k, v in cfg.domain_list.iteritems():
+			for k, v in cfg.domain_list.items():
 				if v[1] == dom_long:
 					dom_short = v[0]
 					dom_id = k
@@ -107,16 +109,16 @@ def main():
 			domains.append((dom_id, dom_short, dom_long))
 			break
 
-	print "[*] Extracting users and groups..."
+	print("[*] Extracting users and groups...")
 	group_members = {}
 	group_to_sid = {}
 	user_to_sid = {}
-	for k, v in ldif.iteritems():
+	for k, v in ldif.items():
 
 		# group
 		if 'objectClass' in v and v['objectClass'] == ['top', 'group']:
 			dn = v['dn']
-			name = v['name']
+			name = v['displayName'] if 'displayName' in v else v['name']
 
 			sid = get_string_sid_from_binary_sid(v['objectSid'])[1]
 
@@ -130,7 +132,7 @@ def main():
 		# user
 		if 'objectClass' in v and v['objectClass'] == ['top', 'person', 'organizationalPerson', 'user']:
 			dn = str(v['dn'])
-			name = str(v['name'])
+			name = str(v['displayName']) if 'displayName' in v else str(v['name'])
 			username = str(v['sAMAccountName'])
 			descr = str(v['description']) if 'description' in v else None
 
@@ -145,8 +147,8 @@ def main():
 			except:
 				pass
 
-	print "[*] Resolving group memberships..."
-	for group_id, v in group_members.iteritems():
+	print("[*] Resolving group memberships...")
+	for group_id, v in group_members.items():
 
 		if not isinstance(v, list):
 			v = [v]
@@ -164,25 +166,25 @@ def main():
 			idx = hex(int('%d%d%d' % (dom_id, account_id, group_id)))[2:]
 			members.append((idx, dom_id, account_id, group_id, is_group))
 
-	print "[*] Updating database..."
+	print("[*] Updating database...")
 
 	res_d = cfg.cursor.executemany("INSERT OR REPLACE INTO domains (id, domain, fqdn) VALUES (?, ?, ?)", domains)
-	print "[+] %d domains updated." % res_d.rowcount
+	print("[+] %d domains updated." % res_d.rowcount)
 
 	res_i = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_accounts (rid, domain_id, username, name, descr) VALUES (?, ?, ?, ?, ?)", users_ins)
-	print "[+] %d user accounts inserted." % res_i.rowcount
+	print("[+] %d user accounts inserted." % res_i.rowcount)
 
 	res_u = cfg.cursor.executemany("UPDATE domain_accounts SET username=?, name=?, descr=? WHERE rid=? and domain_id=?", users_upd)
-	print "[+] %d user accounts updated." % res_u.rowcount
+	print("[+] %d user accounts updated." % res_u.rowcount)
 
 	res_g = cfg.cursor.executemany("INSERT OR REPLACE INTO domain_groups (rid, domain_id, name) VALUES(?, ?, ?)", groups)
-	print "[+] %d unique groups updated." % res_g.rowcount
+	print("[+] %d unique groups updated." % res_g.rowcount)
 
 	res_m = cfg.cursor.executemany("INSERT OR REPLACE INTO group_members (idx, domain_id, account_id, group_id, is_group) VALUES(?, ?, ?, ?, ?)", members)
-	print "[+] %d group memberships updated." % res_m.rowcount
+	print("[+] %d group memberships updated." % res_m.rowcount)
 
 	cfg.cursor.commit()
-	print "[*] Done."
+	print("[*] Done.")
 
 if __name__ == '__main__':
 
@@ -202,14 +204,14 @@ if __name__ == '__main__':
 	cfg = parser.parse_args()
 	cfg.config_file  = os.path.join(os.path.expanduser('~'), '.%s' % __prog_name__)
 
-	CP = ConfigParser.ConfigParser()
+	CP = configparser.ConfigParser()
 	CP.read(cfg.config_file)
 
 	try:
 		cfg.project_dir     = os.path.expanduser(CP.get('core', 'PROJECTS_PATH').strip())
 		cfg.current_project = CP.get('core', 'CURRENT_PROJECT').strip()
 
-	except ConfigParser.NoOptionError:
+	except configparser.NoOptionError:
 		sys.exit("[!] Error: some fields are missing from the configuration file.")
 
 	if not get_confirmation('Do you really want to update the database for the "%s" project?' % cfg.current_project):
